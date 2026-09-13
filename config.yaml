@@ -1,0 +1,51 @@
+# Single source of truth for all experimental parameters.
+# Any change here changes config_hash(), which keys the LLM cache and run files.
+
+onet:
+  data_dir: null            # null -> ONET_DATA_DIR env var -> ../db_30_3_csv
+  release: "30.3"
+  release_date: "2026-05"
+
+models:
+  generator: claude-sonnet-5
+  generator_ablation: claude-haiku-4-5
+  paraphraser: claude-haiku-4-5
+  judge: claude-haiku-4-5
+  embedder: BAAI/bge-base-en-v1.5
+  embedder_ablation: sentence-transformers/all-MiniLM-L6-v2
+  embedder_query_prefix: "Represent this sentence for searching relevant passages: "
+
+generation:
+  max_tokens: 4000   # adaptive thinking shares this ceiling; temperature is fixed by the API on Claude 5-family models
+
+budget:
+  context_tokens: 2000            # matched retrieval budget B across S1-S3
+  sweep: [500, 1000, 2000, 4000]  # ablation
+
+graph:
+  rated_weight:                    # w = a*(IM/5) + b*(LV/7), used for expansion pruning
+    importance: 0.7
+    level: 0.3
+  expansion:
+    max_depth: 3
+    max_edges: 120
+
+retrieval:
+  vector_top_k: 24                 # pre-budget candidate pool (tuned on dev)
+  hybrid_seed_cards: 8
+
+benchmark:
+  seed: 20260821
+  total: 1250
+  dev_size: 150
+  max_items_per_job: 8
+  sizes:
+    one_hop: 300
+    two_hop: 300
+    three_hop: 300
+    comparative: 200
+    absence: 150
+  filters:
+    topk_gap_min: 0.25             # T03: importance gap between rank k and k+1
+    comparative_gap_min: 0.5       # T07: importance gap between the two jobs
+    bridge_cosine_max: 0.35        # T09: title-embedding dissimilarity threshold

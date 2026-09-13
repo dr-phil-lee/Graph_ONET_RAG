@@ -1,0 +1,41 @@
+{
+  "onet_release": "30.3",
+  "analytic_sample": 894,
+  "nodes_total": 30328,
+  "edges_total": 236125,
+  "nodes_by_label": {
+    "Task": 18236,
+    "Technology": 8566,
+    "DWA": 2087,
+    "Job": 894,
+    "IWA": 332,
+    "Ability": 52,
+    "GWA": 41,
+    "Knowledge": 33,
+    "ElementGroup": 31,
+    "TransferableSkill": 25,
+    "WorkStyle": 21,
+    "EssentialSkill": 10
+  },
+  "edges_by_type": {
+    "RATED": 143914,
+    "USES_TECH": 30324,
+    "MAPS_TO": 23154,
+    "HAS_TASK": 18236,
+    "RELATED_TO": 17042,
+    "PART_OF": 2419,
+    "ENABLES": 916,
+    "IN_GROUP": 120
+  },
+  "suppressed_rows_dropped": {
+    "essential_skills.csv": 16,
+    "transferable_skills.csv": 131,
+    "abilities.csv": 68,
+    "knowledge.csv": 4880,
+    "work_activities.csv": 1063
+  },
+  "rated_weight": {
+    "importance": 0.7,
+    "level": 0.3
+  }
+}

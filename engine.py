@@ -56,7 +56,7 @@ class ChatEngine:
         cfg["models"]["generator"] = "openrouter"                 # label only
         self.cfg = cfg
         self.G = store.load_graph(data_path(cfg, "graph", "meta.json").parent)
-        self.anchors = LevelAnchors(OnetData(cfg["onet"]["data_dir"]))
+        self.anchors = self._load_anchors(cfg)
         self.linker = EntityLinker(self.G)
         key = os.getenv("OPENROUTER_API_KEY", "").strip()
         llm = (OpenRouterLLM(key, bootstrap.OPENROUTER_DEFAULT_MODEL)
@@ -68,6 +68,19 @@ class ChatEngine:
             (self.G.nodes[n]["name"], n) for n in self.G
             if self.G.nodes[n].get("label") == "Job")
         self._n_asked = 0
+
+    @staticmethod
+    def _load_anchors(cfg: dict) -> LevelAnchors | None:
+        """Behavioral level anchors: the bundled data/onet/ file first, then a
+        full O*NET CSV folder if configured; None just drops the anchor
+        phrases from RATED evidence lines."""
+        bundled = bootstrap.DATA_DIR / "onet"
+        for candidate in (bundled, cfg["onet"]["data_dir"]):
+            try:
+                return LevelAnchors(OnetData(candidate))
+            except (FileNotFoundError, OSError):
+                continue
+        return None
 
     # ------------------------------------------------------------- backend
     @property

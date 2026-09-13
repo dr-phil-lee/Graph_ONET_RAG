@@ -218,6 +218,6 @@ def ego_edges(G, center: str, radius: int = 1,
 
 
 def graph_stats() -> dict:
-    meta = json.loads((Path(bootstrap.RESEARCH_DIR) / "data" / "graph" /
+    meta = json.loads((Path(bootstrap.DATA_DIR) / "graph" /
                        "meta.json").read_text(encoding="utf-8"))
     return meta
