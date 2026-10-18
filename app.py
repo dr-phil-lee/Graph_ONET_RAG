@@ -27,6 +27,10 @@ st.markdown(
     """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* ---- hide Streamlit deploy button ---- */
+.stAppDeployButton {
+    display: none !important;
+}
 
 /* ---- global polish ---- */
 html, body, [class*="css"] {font-family: "Inter", "Segoe UI", sans-serif;}
