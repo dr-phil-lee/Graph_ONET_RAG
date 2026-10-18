@@ -27,26 +27,27 @@ st.markdown(
     """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-/* ---- hide Streamlit deploy button ---- */
+
+/* ---- hide Streamlit controls inside the app ---- */
+
+/* Hide deploy button */
 .stAppDeployButton {
     display: none !important;
 }
 
-/* Hide Streamlit GitHub and Fork controls */
-#GithubIcon,
-a[href*="github.com"] {
+/* Hide app toolbar and status indicators */
+[data-testid="stToolbar"],
+[data-testid="stStatusWidget"],
+[data-testid="stDecoration"] {
     display: none !important;
 }
 
-/* ---- hide Streamlit menus and footer ---- */
+/* Hide the main menu */
 #MainMenu {
     display: none !important;
 }
 
-#GithubIcon {
-    display: none !important;
-}
-
+/* Hide footer */
 footer {
     display: none !important;
 }
