@@ -2,3 +2,5 @@ models/
 .venv/
 __pycache__/
 .env
+sessions/
+.pytest_cache/

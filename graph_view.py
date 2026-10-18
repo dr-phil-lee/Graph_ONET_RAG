@@ -38,13 +38,30 @@ def _short(text: str, limit: int = 28) -> str:
 
 def render_edges_html(G, edges: list[q.Edge], anchors: LevelAnchors | None = None,
                       cited_edge_ids: set[int] | frozenset = frozenset(),
-                      height: int = 550) -> str:
-    """Standalone HTML for a subgraph given as an edge list."""
+                      height: int = 550, *,
+                      extra_nodes: list[str] | tuple = (),
+                      focus_nodes: set[str] | frozenset = frozenset(),
+                      exposure: dict[str, dict] | None = None,
+                      edge_colors: dict[int, str] | None = None,
+                      legend: list[tuple[str, str]] | None = None) -> str:
+    """Standalone HTML for a subgraph given as an edge list.
+
+    extra_nodes:  nodes to draw even when no edge touches them (e.g. an
+                  occupation whose profile was cited).
+    focus_nodes:  drawn larger with a thick dark border (the user's job).
+    exposure:     soc -> AI-exposure dict; Job nodes are then colored on a
+                  continuous green-red scale and labelled with the score.
+    edge_colors:  edge id -> color (e.g. one color per conversation turn);
+                  overrides the cited/retrieved coloring.
+    legend:       [(color, text)] drawn in the bottom-left corner.
+    """
     from pyvis.network import Network
 
     net = Network(directed=True, height=f"{height}px", width="100%",
                   cdn_resources="in_line", notebook=False)
     seen: set[str] = set()
+    exposure = exposure or {}
+    edge_colors = edge_colors or {}
 
     def add_node(n: str):
         if n in seen:
@@ -53,28 +70,77 @@ def render_edges_html(G, edges: list[q.Edge], anchors: LevelAnchors | None = Non
         a = G.nodes[n] if n in G else {}
         label = a.get("label", "?")
         name = a.get("name", n)
-        net.add_node(n,
-                     label=_short(name) if label in _LABELED else " ",
-                     title=f"{label}: {name} — click for details",
-                     color=LABEL_COLORS.get(label, "#999999"),
-                     size=22 if label == "Job" else 12)
+        color = LABEL_COLORS.get(label, "#999999")
+        text = _short(name) if label in _LABELED else " "
+        title = f"{label}: {name} — click for details"
+        x = exposure.get(n) if label == "Job" else None
+        if x:
+            color = x.get("color", color)
+            text = f"{_short(name, 26)}\nAI {x['composite']:.2f}"
+            title = (f"{label}: {name} — AI exposure score {x['composite']:.2f} "
+                     f"— click for details")
+        elif exposure and label == "Job":
+            color = "#9CA3AF"      # exposure view, but the index has no row
+        focus = n in focus_nodes
+        kw = {}
+        if focus:
+            kw = {"borderWidth": 4, "shape": "star" if label == "Job" else "dot"}
+            color = {"background": color, "border": "#111827",
+                     "highlight": {"background": color, "border": "#111827"}}
+        net.add_node(n, label=text, title=title, color=color,
+                     size=(34 if focus else 22) if label == "Job" else 12,
+                     font={"size": 14 if focus else 12,
+                           "face": "Inter, Segoe UI, sans-serif"}, **kw)
 
     for u, v, k, d in edges:
         add_node(u)
         add_node(v)
         cited = int(k) in cited_edge_ids
+        color = edge_colors.get(int(k)) or ("#d62728" if cited else "#c9c9c9")
         net.add_edge(u, v,
                      title=edge_line(G, (u, v, k, d), anchors),
                      label=d.get("type", ""),
-                     color="#d62728" if cited else "#c9c9c9",
-                     width=3 if cited else 1,
+                     color=color,
+                     width=3 if (cited or int(k) in edge_colors) else 1,
+                     dashes=not cited and int(k) not in edge_colors,
                      eid=str(int(k)))
+    for n in extra_nodes:
+        if n in G:
+            add_node(n)
     net.set_options(_OPTIONS)
     html = net.generate_html()
-    return _inject_click_panel(html, G, edges, seen, anchors, cited_edge_ids)
+    html = _inject_click_panel(html, G, edges, seen, anchors, cited_edge_ids,
+                               exposure=exposure)
+    if legend:
+        html = html.replace("</body>", _legend_html(legend) + "\n</body>")
+    return html
 
 
-def _node_details_html(G, n: str) -> str:
+def _legend_html(items: list[tuple[str, str]]) -> str:
+    from html import escape
+
+    rows = "".join(
+        f"<div><span style='display:inline-block;width:11px;height:11px;"
+        f"border-radius:50%;background:{c};margin-right:6px;vertical-align:-1px'>"
+        f"</span>{escape(t)}</div>" for c, t in items)
+    return ("<div style=\"position:absolute;bottom:30px;left:10px;z-index:20;"
+            "background:rgba(255,255,255,.92);border:1px solid #e3e7ec;"
+            "border-radius:8px;padding:6px 10px;font:11px 'Segoe UI',system-ui,"
+            f"sans-serif;color:#374151;line-height:1.7\">{rows}</div>")
+
+
+def exposure_legend() -> list[tuple[str, str]]:
+    import ai_exposure
+
+    lo, mid, hi = ai_exposure.COLOR_STOPS
+    return [(lo[1], f"AI exposure score {lo[0]:.2f} or lower"),
+            (mid[1], f"AI exposure score {mid[0]:.2f}"),
+            (hi[1], f"AI exposure score {hi[0]:.2f} or higher"),
+            ("#9CA3AF", "Job not in the AI Exposure Index"),
+            ("#111827", "★ = occupation you asked about")]
+
+
+def _node_details_html(G, n: str, exposure: dict | None = None) -> str:
     from html import escape
 
     a = G.nodes[n] if n in G else {}
@@ -93,6 +159,13 @@ def _node_details_html(G, n: str) -> str:
         sample = ", ".join(escape(str(x)) for x in list(alts)[:8])
         more = f" … (+{len(alts) - 8} more)" if len(alts) > 8 else ""
         rows.append((f"Alternate titles ({len(alts)})", sample + more))
+    if exposure:
+        rows.append(("AI exposure (Opportunity Data index)",
+                     f"<b style='color:{exposure.get('color', '#333')}'>"
+                     f"{exposure['composite']:.2f}</b> (0 = protected, 1 = exposed)<br>"
+                     f"digital {exposure['digital']:.2f} · human contact "
+                     f"{exposure['human_contact']:.2f} · physical {exposure['physical']:.2f}<br>"
+                     f"= {escape(exposure.get('calculation', ''))}"))
     if a.get("tech_category"):
         rows.append(("Software category", escape(str(a["tech_category"]))))
     if a.get("task_type"):
@@ -150,9 +223,10 @@ def _edge_details_html(G, edge, anchors) -> str:
 
 
 def _inject_click_panel(html: str, G, edges, nodes, anchors,
-                        cited_edge_ids) -> str:
+                        cited_edge_ids, exposure: dict | None = None) -> str:
     """Add a click-to-inspect details panel inside the pyvis page."""
-    node_info = {str(n): _node_details_html(G, n) for n in nodes}
+    exposure = exposure or {}
+    node_info = {str(n): _node_details_html(G, n, exposure.get(n)) for n in nodes}
     edge_info = {str(int(k)): _edge_details_html(G, (u, v, k, d), anchors)
                  for u, v, k, d in edges}
     panel = """
@@ -185,6 +259,17 @@ def _inject_click_panel(html: str, G, edges, nodes, anchors,
     if (typeof network === "undefined" || network === null) {
       setTimeout(attach, 200); return;
     }
+    // graphs inside a hidden tab are laid out at zero size: re-fit the view
+    // whenever the frame gets a real size (tab opened, window resized)
+    var box = document.getElementById("mynetwork");
+    var lastW = 0;
+    function refit() {
+      var w = box ? box.clientWidth : 0;
+      if (w > 0 && w !== lastW) { lastW = w; network.redraw(); network.fit({animation: false}); }
+    }
+    if (box && typeof ResizeObserver !== "undefined") { new ResizeObserver(refit).observe(box); }
+    network.once("stabilizationIterationsDone", function () { lastW = 0; refit(); });
+    document.addEventListener("visibilitychange", refit);
     var panel = document.getElementById("infopanel");
     function show(html) {
       panel.innerHTML = "<span class='ix' onclick=\\"this.parentNode.style.display='none'\\">&#10005;</span>" + html;
