@@ -32,6 +32,19 @@ st.markdown(
     display: none !important;
 }
 
+/* ---- hide Streamlit menus and footer ---- */
+#MainMenu {
+    display: none !important;
+}
+
+#GithubIcon {
+    display: none !important;
+}
+
+footer {
+    display: none !important;
+}
+
 /* ---- global polish ---- */
 html, body, [class*="css"] {font-family: "Inter", "Segoe UI", sans-serif;}
 .block-container {padding-top: 1.2rem; max-width: 1250px;}
