@@ -32,6 +32,12 @@ st.markdown(
     display: none !important;
 }
 
+/* Hide Streamlit GitHub and Fork controls */
+#GithubIcon,
+a[href*="github.com"] {
+    display: none !important;
+}
+
 /* ---- hide Streamlit menus and footer ---- */
 #MainMenu {
     display: none !important;
