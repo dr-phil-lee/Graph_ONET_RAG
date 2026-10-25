@@ -70,7 +70,8 @@ section[data-testid="stSidebar"] h3 {font-size: .8rem; text-transform: uppercase
 
 /* ---- top bar ---- */
 .topbar {display:flex; align-items:baseline; gap:.2rem .6rem; padding:.1rem 0 .4rem; flex-wrap:wrap;}
-.topbar .t {font-size: 1.3rem; font-weight: 800; letter-spacing: -.02em; white-space: nowrap;}
+.topbar .t {font-size: clamp(1rem, 1.5vw, 1.3rem); font-weight: 800; letter-spacing: -.02em;
+  line-height: 1.25; overflow-wrap: anywhere;}
 .topbar .s {font-size: .95rem; color: #4B5563; flex-basis: 100%;}
 .st-key-topbtn-report button, .st-key-topbtn-clear button {white-space: nowrap;}
 
@@ -295,7 +296,7 @@ with st.sidebar:
     backend_desc = f"OpenRouter: {ss.or_model}"
 
 # ------------------------------------------- top bar: title · report · clear
-_c_title, _c_report, _c_clear = st.columns([5.6, 1.6, 1.3], vertical_alignment="center")
+_c_title, _c_report, _c_clear = st.columns([6, 1.5, 1.2], vertical_alignment="center")
 with _c_title:
     st.markdown("<div class='topbar'><span class='t'>🧭 GraphRAG-Based O*NET Chatbot</span>"
                 "<span class='s'>Occupations, skills and AI exposure, answered from "
