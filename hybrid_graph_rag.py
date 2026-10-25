@@ -121,7 +121,9 @@ class HybridGraphRAG(GraphRAG):
         jobs = [s for s in seeds if self.G.nodes[s].get("label") == "Job"]
         if not jobs:
             return units
-        question = (item.get("question_natural") or item["question_template"]).lower()
+        # the user's own words decide the intent - never the model's rewrite,
+        # so the evidence is the same whichever model answers
+        question = item["question_template"].lower()
         extra = self._intent_units(question, jobs)
         if extra:
             # seed profiles first, then intent evidence, then the research ranking
@@ -308,7 +310,7 @@ class HybridGraphRAG(GraphRAG):
             except Exception:  # noqa: BLE001 — reporting only; keep the estimate
                 pass
         question = item["question_template"]
-        interpreted = item.get("question_natural")
+        interpreted = item.get("question_interpreted")
         ctx = ""
         if kept:
             ctx = "\n".join(f"[{u['unit_id']}] {u['text']}" if not u["text"].startswith("[")

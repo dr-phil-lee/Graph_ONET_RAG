@@ -247,8 +247,6 @@ _RATED_TABLE = {
     "GWA": "Work Activities ratings (work_activities.csv)",
 }
 _PROFILE_TABLE = "Occupation Data + Job Zones (occupation_data.csv, job_zones.csv)"
-# any letter outside the Latin ranges (Hangul, CJK, Cyrillic, Arabic, ...)
-_NON_LATIN_LETTER = re.compile(r"[^\x00-\x7F\u00C0-\u024F\s\d\W]")
 
 LINK_SYSTEM_PROMPT = """Extract the occupations (jobs) that the user's message is about: the user's current or past job, and any target jobs they ask about. Write each as a standard English occupation title as used by O*NET (U.S. Department of Labor), singular or plural, e.g. "Telemarketers", "Registered Nurses", "Software Developers". Translate job names written in other languages into English. Do not invent jobs that are not mentioned or clearly implied.
 Respond ONLY with JSON: {"occupations": ["<title>", ...]} - use [] if the message names no occupation."""
@@ -664,45 +662,6 @@ class ChatEngine:
         return True
 
     # ------------------------------------------------ LLM-assisted linking
-    def _llm_link(self, question: str, llm, exclude: set[str]) -> list[Entity]:
-        """Ask the generator which occupations the message is about (handles
-        paraphrases and non-English wording), then map each name onto the
-        graph through search_occupations. Only confident matches are kept."""
-        try:
-            resp = llm.complete(model=self.cfg["models"]["generator"],
-                                system=LINK_SYSTEM_PROMPT, user=question, max_tokens=200)
-            obj = self._parse_json(resp.get("text", "")) or {}
-            names = obj.get("occupations") or []
-        except Exception:  # noqa: BLE001 - linking help is best-effort
-            return []
-        return self._names_to_entities(names[:4], exclude, "inferred")
-
-    def _names_to_entities(self, names: list, exclude: set[str], source: str) -> list[Entity]:
-        """Map model-written occupation titles onto graph Jobs; only
-        confident matches are kept."""
-        from rapidfuzz import fuzz
-
-        out: list[Entity] = []
-        for name in names:
-            if not isinstance(name, str) or not name.strip():
-                continue
-            hits = self.search_occupations(name, 1)
-            if not hits:
-                continue
-            hit = hits[0]
-            if hit["score"] < 90:
-                # fuzzy tier: require whole-string similarity to the surface it
-                # matched, so "Chief Wizard of Nothing" cannot land on "Fire Chief"
-                surface = hit["title"] if hit["matched_on"] == "title" else hit["matched_on"]
-                if fuzz.ratio(name.lower().strip(), surface.lower()) < 85:
-                    continue
-            soc = hit["soc"]
-            if soc in exclude:
-                continue
-            exclude.add(soc)
-            out.append(Entity(soc, hit["title"], "Job", source, name.strip()))
-        return out
-
     # ------------------------------------------------- conversation memory
     @staticmethod
     def _needs_context(question: str, entities: list[Entity]) -> bool:
@@ -713,10 +672,11 @@ class ChatEngine:
         referential = bool(_REFERENTIAL.search(ql))
         return not confident or referential
 
-    def _contextualize(self, question: str, history: list[dict], llm,
-                       exclude: set[str]) -> tuple[str | None, list[Entity]]:
-        """Ask the model to rewrite the follow-up as a standalone question and
-        name the occupations it refers to (resolved against the graph)."""
+    def _contextualize(self, question: str, history: list[dict], llm) -> str | None:
+        """Ask the model to rewrite the follow-up as a standalone question.
+        The rewrite is shown to the model with the question (its reading of
+        the conversation) and reported as `standalone_question`; retrieval
+        never uses it, so the evidence does not depend on the model."""
         block = HybridGraphRAG.history_block(history)
         try:
             resp = llm.complete(model=self.cfg["models"]["generator"],
@@ -724,33 +684,29 @@ class ChatEngine:
                                 user=f"{block}\n\nLatest message: {question}", max_tokens=300)
             obj = self._parse_json(resp.get("text", "")) or {}
         except Exception:  # noqa: BLE001 - memory help is best-effort
-            return None, []
+            return None
         standalone = obj.get("standalone_question")
-        standalone = standalone.strip() if isinstance(standalone, str) and standalone.strip() else None
-        names = obj.get("occupations") if isinstance(obj.get("occupations"), list) else []
-        return standalone, self._names_to_entities(names[:6], exclude, "memory")
+        return standalone.strip() if isinstance(standalone, str) and standalone.strip() else None
 
     def _carry_over(self, history: list[dict], exclude: set[str]) -> list[Entity]:
-        """Occupations in focus in the most recent turn that had any."""
+        """The occupations in focus in the most recent turn that had any:
+        its seeds, then the occupations its answer listed (exact O*NET
+        titles). Deterministic, so a follow-up retrieves the same records
+        whichever model answers."""
         for turn in reversed(history):
-            out = []
-            for soc in turn.get("seeds") or []:
-                if soc in self.G and soc not in exclude and \
-                        self.G.nodes[soc].get("label") == "Job":
+            out: list[Entity] = []
+            socs = [s for s in (turn.get("seeds") or []) if s in self.G]
+            for title in turn.get("occupations") or []:
+                hits = self.search_occupations(str(title), 1)
+                if hits and hits[0]["score"] >= 100 and hits[0]["soc"] not in socs:
+                    socs.append(hits[0]["soc"])
+            for soc in socs:
+                if soc not in exclude and self.G.nodes[soc].get("label") == "Job":
                     exclude.add(soc)
                     out.append(Entity(soc, self.G.nodes[soc]["name"], "Job", "memory"))
             if out:
                 return out[:6]
         return []
-
-    @staticmethod
-    def _needs_llm_link(question: str, entities: list[Entity]) -> bool:
-        """No confident Job entity yet, or non-Latin wording with nothing
-        pinned or exactly linked."""
-        confident = any(e.label == "Job" and e.confidence == "high" for e in entities)
-        non_latin = bool(_NON_LATIN_LETTER.search(question))
-        return not confident or (non_latin and not any(
-            e.source in ("pinned", "linked") for e in entities))
 
     # ---------------------------------------------------- fuzzy job matching
     _STOP = frozenset("""a an the and or of for to in on at by with from about
@@ -994,8 +950,15 @@ class ChatEngine:
                       default key (env), default model and budget are used.
         history:      prior turns (memory.turn_from_answer records, oldest
                       first). A follow-up that names no occupation or refers
-                      back ("those jobs") is rewritten into a
-                      standalone question and inherits the occupations in focus.
+                      back ("those jobs") inherits the occupations in focus
+                      from the last turn; the model's rewrite of it is shown
+                      to the model as its reading only.
+
+        Retrieval never depends on the language model: the seeds come from
+        the wording (exact / alternate titles, confirmed choices, pins) or
+        from the previous turn, and the evidence is cut from the graph with
+        the user's own question. Whichever model answers, the same records
+        are retrieved; the model only writes from them and cites them.
         """
         question = (question or "").strip()
         if not question:
@@ -1021,27 +984,17 @@ class ChatEngine:
             res.seeds = [e.node_id for e in res.entities if e.source != "linked"]
         history = memory.normalize_turns(history)[-HISTORY_TURNS:]
         standalone = None
-        contextual: list[Entity] = []
         if history and self._needs_context(question, res.entities):
+            # The occupations in focus carry over from the last turn (no
+            # model involved). The model's rewrite of the follow-up is only
+            # shown to it with the question; retrieval never sees it.
             known = {e.node_id for e in res.entities}
-            standalone, contextual = self._contextualize(question, history, llm, known)
-            if not contextual and not any(e.label == "Job" and e.confidence == "high"
-                                          for e in res.entities):
-                contextual = self._carry_over(history, known)
+            standalone = self._contextualize(question, history, llm)
+            contextual = self._carry_over(history, known)
             if contextual:
                 res.entities = [e for e in res.entities
                                 if not (e.source == "matched" and e.confidence == "low")
                                 ] + contextual
-                res.seeds = [e.node_id for e in res.entities if e.source != "linked"]
-        if not contextual and auto_link and self._needs_llm_link(question, res.entities):
-            known = {e.node_id for e in res.entities}
-            inferred = self._llm_link(question, llm, known)
-            if inferred:
-                # the model's reading of the question beats a low-confidence
-                # single-word alternate-title guess
-                res.entities = [e for e in res.entities
-                                if not (e.source == "matched" and e.confidence == "low")
-                                ] + inferred
                 res.seeds = [e.node_id for e in res.entities if e.source != "linked"]
         aliases = []
         for e in res.entities:
@@ -1051,7 +1004,7 @@ class ChatEngine:
             if wording:
                 aliases.append(f"'{wording}' = {e.name} ({e.node_id})")
         item = {"qid": qid or f"chat-{next(self._qid)}-{time.time():.0f}",
-                "question_template": question, "question_natural": standalone,
+                "question_template": question, "question_interpreted": standalone,
                 "history": history, "aliases": aliases,
                 "forced_seeds": res.seeds,
                 # the fully resolved entity list (pins, filtered exact links,

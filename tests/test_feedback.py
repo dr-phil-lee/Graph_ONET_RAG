@@ -165,6 +165,30 @@ def test_focus_graph_is_the_same_whichever_model_cites(engine):
     assert a.cited_edge_ids != b.cited_edge_ids                  # ... different highlights
 
 
+def test_retrieval_is_identical_whichever_model_answers(engine):
+    """Paraphrases and follow-ups: two models that read the question
+    differently still get the same evidence and the same graphs."""
+    from tests.test_structured_memory import _with_llm
+    q = "I sell things over the phone all day. What other jobs could I do?"
+    a = _with_llm(engine, FakeLLM(link_reply=["Telemarketers"]), q)
+    b = _with_llm(engine, FakeLLM(link_reply=["Customer Service Representatives"]), q)
+    assert a.seeds == b.seeds and a.retrieved_edge_ids == b.retrieved_edge_ids
+    hist = [{"question": "Compare Software Developers and Data Scientists.",
+             "occupations": ["Software Developers", "Data Scientists"],
+             "seeds": ["15-1252.00", "15-2051.00"], "summary": "..."}]
+    q = "Which of those is more exposed to AI?"
+    a = _with_llm(engine, FakeLLM(context_reply={
+        "standalone_question": "Which of Software Developers and Data Scientists is more exposed to AI?",
+        "occupations": ["Software Developers", "Data Scientists"]}), q, history=hist)
+    b = _with_llm(engine, FakeLLM(context_reply={
+        "standalone_question": "Is a Data Scientist more exposed to AI than a Software Developer?",
+        "occupations": ["Data Scientists"]}), q, history=hist)
+    assert a.seeds == b.seeds == ["15-1252.00", "15-2051.00"]
+    assert a.retrieved_edge_ids == b.retrieved_edge_ids
+    assert a.focus_edge_ids == b.focus_edge_ids and a.focus_node_ids == b.focus_node_ids
+    assert a.standalone_question != b.standalone_question     # only the model's reading differs
+
+
 # ---------------------------------------------------------------- budget
 def test_budget_ceiling_and_reply_ceiling_raised():
     assert bootstrap.BUDGET_SLIDER_MAX == 10000

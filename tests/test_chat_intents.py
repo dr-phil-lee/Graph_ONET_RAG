@@ -62,58 +62,54 @@ def test_paraphrase_without_job_word_matches_nothing(engine):
     assert [e for e in res.entities if e.label == "Job"] == []
 
 
-def test_low_confidence_alt_title_match_is_replaced_by_llm_link(engine):
-    # "doctor" only exists as alternate titles -> low confidence guess;
-    # the model's reading ("Physicians"-like title) must replace it
+def test_model_never_chooses_the_seeds(engine):
+    """The language model is not asked which occupations a paraphrase is
+    about: only the wording (and the user's confirmed choice) seeds the
+    retrieval, so the evidence is the same whichever model answers."""
+    # "doctor" only exists as alternate titles -> low-confidence wording guess,
+    # which stays (the UI asks the user to confirm it before answering)
     res = engine.resolve_seeds("I work as a doctor and want a change")
     assert res.entities and res.entities[0].confidence == "low"
     llm = FakeLLM(link_reply=["Family Medicine Physicians"])
     ans = _with_llm(engine, llm, "I work as a doctor and want a change")
-    assert llm.link_calls == 1
-    assert [e.source for e in ans.entities] == ["inferred"]
-    assert ans.entities[0].name == "Family Medicine Physicians"
+    assert llm.link_calls == 0
+    assert all(e.source != "inferred" for e in ans.entities)
+    assert "Family Medicine Physicians" not in [e.name for e in ans.entities]
 
-
-def test_llm_link_runs_only_when_needed(engine):
     llm = FakeLLM(link_reply=["Telemarketers"])
     ans = _with_llm(engine, llm, "I sell things over the phone, what should I do next?")
-    assert llm.link_calls == 1
-    assert [(e.node_id, e.source, e.term) for e in ans.entities] == [(TM, "inferred", "Telemarketers")]
-    assert ans.seeds == [TM]
-
-    llm = FakeLLM(link_reply=["Telemarketers"])
-    _with_llm(engine, llm, "What is the Job Zone of Registered Nurses?")
-    assert llm.link_calls == 0, "exact link found: no extra LLM call"
-
-
-def test_paraphrased_job_uses_llm_link(engine):
-    llm = FakeLLM(link_reply=["Xqzv Wplk", "Telemarketer"])
-    ans = _with_llm(engine, llm, "I cold-call strangers all day and want to change jobs")
-    assert llm.link_calls == 1
-    assert [e.node_id for e in ans.entities] == [TM]     # garbage name skipped, title matched
-    assert ans.status == "grounded"
+    assert llm.link_calls == 0 and ans.entities == [] and ans.seeds == []
+    assert ans.status in ("ungrounded", "grounded")
+    # ... the model's reading is still *offered* for confirmation
+    old = engine.default_llm
+    engine.default_llm = FakeLLM(link_reply=["Telemarketers"])
+    try:
+        p = engine.propose_occupations("I sell things over the phone, what should I do next?")
+    finally:
+        engine.default_llm = old
+    assert p["confirm"] and p["terms"][0]["candidates"][0] == (TM, "Telemarketers")
 
 
-def test_llm_link_ignores_low_confidence_and_garbage(engine):
-    llm = FakeLLM(link_reply=["Chief Wizard of Nothing", 42, ""])
-    ans = _with_llm(engine, llm, "I do magic for a living, what next?")
-    assert ans.entities == [] and ans.evidence == []
-
-
-def test_llm_link_failure_is_tolerated(engine):
+def test_model_failure_in_the_confirmation_step_is_tolerated(engine):
     class Broken(FakeLLM):
         def complete(self, *, model, system, user, **kw):
             if system.startswith("Extract"):
                 raise RuntimeError("boom")
             return super().complete(model=model, system=system, user=user, **kw)
 
-    ans = _with_llm(engine, Broken(), "I sell things over the phone")
-    assert ans.entities == [] and ans.status in ("ungrounded", "grounded")
+    old = engine.default_llm
+    engine.default_llm = Broken()
+    try:
+        p = engine.propose_occupations("I sell things over the phone")
+        ans = engine.ask("I sell things over the phone")
+    finally:
+        engine.default_llm = old
+    assert p["terms"] == [] and ans.entities == []
 
 
-def test_auto_link_false_skips_llm_link(engine):
+def test_auto_link_false_skips_wording_matches(engine):
     llm = FakeLLM(link_reply=["Telemarketers"])
-    ans = _with_llm(engine, llm, "I sell things over the phone", auto_link=False)
+    ans = _with_llm(engine, llm, "I am a telemarketer", auto_link=False)
     assert llm.link_calls == 0 and ans.entities == []
 
 

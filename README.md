@@ -127,10 +127,13 @@ Every answer goes through the same checks, in the UI and the API:
    longer pulls in Market Research Analysts. Three-word titles are matched
    as one phrase first ("elementary school teacher" is one occupation, not
    also the Special Education one; "high school teacher" is the O*NET
-   alternate title of Secondary School Teachers). When the wording names no
-   occupation at all ("I sell things over the phone"), the generator is asked once which occupations the message is
-   about and the names are searched in O*NET (`source: "inferred"`). Every
-   non-exact entity is marked `≈` in the UI so you can rephrase with the exact title.
+   alternate title of Secondary School Teachers). The language model never
+   chooses the retrieval seeds: when the wording names no occupation at all
+   ("I sell things over the phone"), the UI's confirmation card may *offer*
+   the model's reading as candidates, but only what the user confirms (or
+   pins) seeds the retrieval. Every non-exact entity is marked `≈` in the UI
+   so you can rephrase with the exact title. Same question, same history =>
+   same evidence and the same graphs, whichever model answers.
 6. **Questions are answered as fully as the graph allows.** Career-change,
    "similar job" and "what else could I do" questions pull O*NET's official
    *Related Occupations* (ranked), the profiles of those occupations, and the
@@ -164,9 +167,11 @@ Every answer goes through the same checks, in the UI and the API:
 10. **Memory is context, not evidence.** Prior turns are shown to the model
    under "Conversation so far (context only - NOT evidence, never cite it)".
    A follow-up that names no occupation or points back ("those", "the second
-   one") is first rewritten into a standalone question, and the
-   occupations it refers to become retrieval seeds (`source: "memory"`, 🧠 in
-   the UI). Citations must still come from the new evidence.
+   one") inherits the occupations in focus from the last turn - its seeds and
+   the occupations its answer listed - as retrieval seeds (`source:
+   "memory"`, 🧠 in the UI); the model's rewrite of the follow-up
+   (`standalone_question`) is shown to the model as its reading only and
+   never drives retrieval. Citations must still come from the new evidence.
 
 ## AI Exposure Index
 
@@ -425,7 +430,9 @@ const {answer, citations, status, evidence} = await r.json();
   has no occupation matching X, please check the name and ask again" - so
   the user re-checks it first. Candidates come from the wording and, when a
   model key is set, from the model's reading of the message ("I sell things
-  over the phone" -> Telemarketers). Exact titles, skill/task questions and
+  over the phone" -> Telemarketers) - but the model only *offers*; the
+  retrieval seeds are what the user confirms. "Answer anyway" proceeds with
+  the wording matches alone. Exact titles, skill/task questions and
   follow-ups ("which of those...") need no confirmation.
 - **Chat** — each answer opens directly on six clickable views drawn as
   pill buttons under a "click each tab" hint (📝 Answer · 🎯 Focus graph ·

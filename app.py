@@ -304,8 +304,9 @@ with st.sidebar:
         "Remember the conversation", value=ss.use_memory,
         help="Follow-ups like 'which of those is least exposed to AI?' or "
              "'what does the second one do?' are read with the previous turns: the "
-             "question is rewritten into a standalone one and the occupations in "
-             "focus carry over. Memory is context only, never cited as evidence.")
+             "occupations in focus (and those listed in the last answer) carry over "
+             "to the retrieval, and the model is shown the earlier turns. Memory is "
+             "context only, never cited as evidence.")
     _answers_all = _all_answers()
     _remembered = _answers_all[ss.memory_from:] if ss.use_memory else []
     if _remembered:
@@ -379,7 +380,8 @@ def how_it_works_html() -> str:
          "We find the occupations, skills or activities you mention — by their O*NET "
          "titles, common alternate names (\"RN\", \"high school teacher\") or close "
          "matches. If there is no exact O*NET occupation for what you typed, we show "
-         "the closest ones and ask you to confirm before going on."),
+         "the closest ones and ask you to confirm before going on. The language "
+         "model never decides which occupations are looked up."),
         ("🧩", "We collect the facts around them",
          "Starting from those points we walk the map and gather the O*NET records that "
          "matter for your question: tasks, importance ratings, related occupations, and "
@@ -614,8 +616,10 @@ def confirmation_card(pending: dict) -> None:
             go_label = "✅ Yes, proceed"
         go = c1.button(go_label, type="primary", disabled=not picked, width="stretch")
         skip = c2.button("Answer anyway, without choosing", width="stretch",
-                         help="Not recommended: the evidence may not match your wording, "
-                              "and the answer will say so.")
+                         help="Not recommended: only the occupations matched from your "
+                              "wording are looked up (never the model's guess), so the "
+                              "evidence may not cover what you meant - the answer will "
+                              "say so.")
         if go or skip:
             ss.pending_confirm = None
             chosen = picked if go else []

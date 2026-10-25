@@ -207,17 +207,23 @@ def test_to_dict_has_structured_fields(engine, fake_llm):
 
 
 # ------------------------------------------------------------------ memory
-def test_followup_is_rewritten_and_inherits_occupations(engine):
+def test_followup_inherits_the_occupations_in_focus(engine):
+    """A follow-up carries over the last turn's occupations (its seeds and
+    the ones its answer listed). The model's rewrite is shown to the model
+    but never chooses the seeds, so retrieval is model-independent."""
     first = _with_llm(engine, FakeLLM(), "I am a tele marketer and want to change jobs")
     turn = first.memory_turn()
     assert turn["seeds"][0] == TM and turn["occupations"][0] == "Telemarketers"
+    turn = {"question": turn["question"], "summary": turn["summary"], "seeds": [TM],
+            "occupations": ["Telemarketers", "Customer Service Representatives",
+                            "Counter and Rental Clerks"]}
     llm = FakeLLM(context_reply={
         "standalone_question": "Which of Customer Service Representatives and Counter and "
                                "Rental Clerks is least exposed to AI?",
-        "occupations": ["Customer Service Representatives", "Counter and Rental Clerks"]})
+        "occupations": ["Retail Salespersons"]})            # ignored for retrieval
     ans = _with_llm(engine, llm, "Which of those is least exposed to AI?", history=[turn])
     assert llm.context_calls == 1 and llm.link_calls == 0
-    assert ans.seeds == [CSR, CRC]
+    assert ans.seeds == [TM, CSR, CRC]
     assert all(e.source == "memory" for e in ans.entities)
     assert ans.standalone_question.startswith("Which of Customer Service")
     assert ans.history_turns == 1
@@ -239,7 +245,7 @@ def test_followup_carries_over_when_rewrite_finds_nothing(engine):
 def test_no_history_means_no_rewrite_call(engine):
     llm = FakeLLM(link_reply=["Telemarketers"])
     _with_llm(engine, llm, "I sell things over the phone")
-    assert llm.context_calls == 0 and llm.link_calls == 1
+    assert llm.context_calls == 0 and llm.link_calls == 0
 
 
 def test_new_named_occupation_skips_rewrite(engine):
@@ -336,7 +342,9 @@ def test_api_session_memory_flow(client, engine):
                                        "session_id": sid})
         b2 = r2.json()
         assert b2["history_turns"] == 1 and b2["session_turns"] == 2
-        assert b2["seeds"] == [CSR] and b2["standalone_question"].startswith("Is Customer")
+        # the occupations in focus carry over; the model's rewrite is reported only
+        assert b2["seeds"] == b1["memory_turn"]["seeds"]
+        assert b2["standalone_question"].startswith("Is Customer")
         s = client.get(f"/sessions/{sid}").json()
         assert s["count"] == 2 and s["turns"][0]["seeds"][0] == TM
         assert client.delete(f"/sessions/{sid}").json()["deleted"] is True
