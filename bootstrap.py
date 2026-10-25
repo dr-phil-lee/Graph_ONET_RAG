@@ -36,8 +36,11 @@ except ImportError:  # dotenv is in requirements; tolerate a bare interpreter
 # --- OpenRouter (the only LLM backend) --------------------------------------
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+# The chat UI always uses this model (GPT-6 Luna: a cost-efficient,
+# high-performance general-purpose model); API callers may pass another.
 OPENROUTER_DEFAULT_MODEL = (os.getenv("OPENROUTER_MODEL", "").strip()
-                            or "anthropic/claude-haiku-4.5")
+                            or "openai/gpt-6-luna")
+OPENROUTER_MODEL_NAME = "GPT-6 Luna"
 # Optional attribution headers OpenRouter shows in its dashboard.
 OPENROUTER_APP_TITLE = "O*NET Graph RAG"
 

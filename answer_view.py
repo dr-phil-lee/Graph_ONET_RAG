@@ -430,41 +430,57 @@ def pivot_map(ans, engine) -> alt.Chart | None:
                                                   range=["diamond", "circle", "square"]),
                         legend=alt.Legend(orient="bottom", title=None)),
         tooltip=["occupation", "role", "Job Zone", alt.Tooltip("AI exposure:Q", format=".4f")])
-    txt = alt.Chart(df).mark_text(align="left", dx=10, fontSize=11).encode(
-        x=x_enc, y=alt.Y("label_y:Q", scale=alt.Scale(domain=[0.4, 5.7])), text="label:N")
+    y_lab = alt.Y("label_y:Q", scale=alt.Scale(domain=[0.4, 5.7]))
+    txt_r = alt.Chart(df).transform_filter("datum.side == 'R'").mark_text(
+        align="left", dx=10, fontSize=11).encode(x=x_enc, y=y_lab, text="label:N")
+    txt_l = alt.Chart(df).transform_filter("datum.side == 'L'").mark_text(
+        align="right", dx=-10, fontSize=11).encode(x=x_enc, y=y_lab, text="label:N")
     leaders = alt.Chart(df).mark_rule(color="#9CA3AF", strokeWidth=1).encode(
         x=x_enc, y=y_enc, y2="label_y:Q")
-    return (leaders + pts + txt).properties(height=340)
+    # fixed plot size (drawn at its own width, not stretched): the label
+    # placement below relies on this geometry
+    # autosize "pad": width/height are the plot area and the axes / legend are
+    # added around it (Streamlit would otherwise fit everything into the box)
+    return (leaders + pts + txt_r + txt_l).properties(
+        width=_PLOT_W, height=_PLOT_H,
+        autosize=alt.AutoSizeParams(type="pad", contains="padding"))
 
 
-# conservative: a 0.7-wide x range on a ~500px plot; wider charts only gain room
-_PX_PER_X = 650         # ≈ pixels per 1.0 of AI exposure
-_PX_PER_CHAR = 6.6      # ≈ width of one character at 11px
-_ZONE_PX = 56           # ≈ pixels per Job Zone step (340px / 6 zones)
+_PLOT_W, _PLOT_H = 600, 300          # plot area in px
+_X_RANGE = (0.2, 0.9)
+_PX_PER_X = _PLOT_W / (_X_RANGE[1] - _X_RANGE[0])      # ≈ 857 px per 1.0 of AI exposure
+_PX_PER_CHAR = 6.6                   # ≈ width of one character at 11px
+_ZONE_PX = _PLOT_H / 5.3             # ≈ 57 px per Job Zone step (domain 0.4 - 5.7)
+_LEFT_SIDE_FROM = 0.62               # points right of this get their label on the left
 
 
 def _place_labels(df: pd.DataFrame) -> pd.DataFrame:
     """Occupations in the same Job Zone sit on one horizontal line, so
-    their labels would run into each other. Labels are placed greedily:
-    within a zone (left to right) each label takes the first stacking level
-    whose previous label has already ended; level 0 is just above the point,
-    level 1 just below, then further above / below. `label_y` is the label's
-    y in data units, drawn with a thin leader to the point."""
+    their labels would run into each other. Each label is placed greedily
+    (left to right within a zone) on the first stacking level where it
+    overlaps no label already placed there: level 0 just above the point,
+    level 1 just below, then further above / below. Points on the right
+    half carry their label to the left so it stays inside the plot.
+    `label_y` is the label's y in data units; a thin leader joins it to the
+    point."""
     df = df.sort_values(["Job Zone", "AI exposure"]).reset_index(drop=True)
     df["label"] = df["occupation"].map(lambda s: s if len(s) <= 36 else s[:35] + "…")
+    df["side"] = df["AI exposure"].map(lambda x: "L" if float(x) > _LEFT_SIDE_FROM else "R")
+    step = 14 / _ZONE_PX                                   # one text line, in zone units
     label_y = []
     for _, grp in df.groupby("Job Zone", sort=False):
-        ends: list[float] = []            # per level: pixel x where its last label ends
-        for x, lab, zone in zip(grp["AI exposure"], grp["label"], grp["Job Zone"]):
-            px = float(x) * _PX_PER_X
-            for lvl, end in enumerate(ends):
-                if end < px - 4:
+        levels: list[list[tuple[float, float]]] = []       # per level: placed [x0, x1] in px
+        for x, lab, side, zone in zip(grp["AI exposure"], grp["label"], grp["side"], grp["Job Zone"]):
+            px = (float(x) - _X_RANGE[0]) * _PX_PER_X
+            w = 12 + _PX_PER_CHAR * len(lab)
+            span = (px, px + w) if side == "R" else (px - w, px)
+            for lvl, placed in enumerate(levels):
+                if all(span[1] + 4 < a or span[0] - 4 > b for a, b in placed):
                     break
             else:
-                lvl = len(ends)
-                ends.append(0.0)
-            ends[lvl] = px + 12 + _PX_PER_CHAR * len(lab)
-            step = 14 / _ZONE_PX                              # ≈ one text line, in zone units
+                lvl = len(levels)
+                levels.append([])
+            levels[lvl].append(span)
             if lvl % 2 == 0:
                 label_y.append(float(zone) + 0.16 + step * (lvl // 2))
             else:
@@ -534,7 +550,7 @@ def charts(ans, engine) -> None:
         if pm is not None:
             st.markdown("**Pivot map: preparation vs. AI exposure** "
                         "(lower-left = less preparation and less exposed)")
-            st.altair_chart(pm, width="stretch")
+            st.altair_chart(pm, width="content")
     missing = [r["title"] for r in ans.ai_exposure if not r.get("exposure")]
     if missing and ans.exposure_in_evidence:
         st.caption("Not covered by the AI Exposure Index: " + ", ".join(missing) + ".")
@@ -611,9 +627,9 @@ VIEW_NOTES = [
     ("📝 Answer", "the written answer: headline, text with citation chips, and a card "
                   "per occupation (Job Zone, AI exposure bar, top skills, sources)."),
     ("🎯 Focus graph", "the retrieved O*NET records that are directly linked to the "
-                       "occupation(s) you asked about (★). It is the same whichever "
-                       "model answers; red = records this model cited, grey dashed = "
-                       "retrieved but not cited."),
+                       "occupation(s) you asked about (★). It does not depend on the "
+                       "model; red = records the model cited, grey dashed = retrieved "
+                       "but not cited."),
     ("🕸️ Evidence graph", "everything retrieved for this question - the whole evidence "
                           "the model was given, including related occupations and their "
                           "own records, so it is larger than the Focus graph."),

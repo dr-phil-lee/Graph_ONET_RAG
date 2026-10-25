@@ -168,6 +168,9 @@ div[data-testid="stColumn"]:has(.st-key-infobar) {position: sticky; top: 3.2rem;
 .cand {font-size:.95rem; margin:.5rem 0 .1rem; color:#111827;}
 .cand .soc {font: 600 .78rem/1.4 ui-monospace, Consolas, monospace; color:#1D4ED8;
   background:#EFF4FF; border:1px solid #BFD3FF; border-radius:6px; padding:0 .4rem; margin-left:.25rem;}
+.modelnote {font-size: .86rem; color: #1F2937; background: #EFF4FF; border: 1px solid #BFD3FF;
+  border-radius: 8px; padding: .45rem .6rem; margin: .1rem 0 .5rem; line-height: 1.4;}
+.modelnote code {font-size: .78rem;}
 .cand .blurb {font-size:.84rem; color:#374151; line-height:1.45; margin-top:.15rem;}
 
 /* ---- buttons ---- */
@@ -193,37 +196,11 @@ def get_engine() -> ChatEngine:
 engine = get_engine()
 st.markdown(av.CSS, unsafe_allow_html=True)
 
-# Curated fallback shown when the live model list can't be fetched.
-_POPULAR_MODELS = [
-    "anthropic/claude-haiku-4.5",
-    "anthropic/claude-sonnet-4.5",
-    "openai/gpt-4o-mini",
-    "google/gemini-2.5-flash",
-    "qwen/qwen-2.5-72b-instruct",
-    "meta-llama/llama-3.3-70b-instruct",
-    "deepseek/deepseek-chat-v3.1",
-    "mistralai/mistral-large-2512",
-]
-_CUSTOM = "✏️ Enter a model id manually..."
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def openrouter_models() -> list[str]:
-    """Live model list from OpenRouter (no key needed); popular ones first."""
-    from openrouter_llm import list_models
-
-    try:
-        ids = list_models()
-        head = [m for m in _POPULAR_MODELS if m in ids]
-        return head + [m for m in ids if m not in head]
-    except Exception:
-        return list(_POPULAR_MODELS)
-
 
 # -------------------------------------------------------- session defaults
 ss.setdefault("messages", [])
 ss.setdefault("or_key", os.getenv("OPENROUTER_API_KEY", "").strip())
-ss.setdefault("or_model", bootstrap.OPENROUTER_DEFAULT_MODEL)
+ss["or_model"] = bootstrap.OPENROUTER_DEFAULT_MODEL      # fixed: GPT-6 Luna
 ss.setdefault("use_memory", True)
 ss.setdefault("memory_from", 0)      # answers before this index are forgotten
 ss.setdefault("pending_confirm", None)   # {"question", "terms"} awaiting the user
@@ -246,36 +223,29 @@ with st.sidebar:
     st.caption("Answers are built only from O*NET 30.3 records and cited. "
                "English questions work best.")
 
-    st.subheader("Model (OpenRouter)")
+    st.subheader("API key (OpenRouter)")
     with st.container(key="apikey"):          # styled like the chat box
         key_input = st.text_input(
             "API key", type="password", value=ss.or_key,
             placeholder="Paste your OpenRouter API key here",
             help="Get one at openrouter.ai. Kept only in this browser session "
                  "(or in Chatbot/.env as OPENROUTER_API_KEY).")
-    model_options = openrouter_models() + [_CUSTOM]
-    default_ix = (model_options.index(ss.or_model)
-                  if ss.or_model in model_options else len(model_options) - 1)
-    model_choice = st.selectbox("Model", model_options, index=default_ix,
-                                help="Type to search the OpenRouter catalog. "
-                                     "Popular models are listed first.")
-    if model_choice == _CUSTOM:
-        model_choice = st.text_input("Custom model id", value=ss.or_model).strip()
-    if st.button("Apply model", width="stretch"):
+    st.markdown(
+        f"<div class='modelnote'>🤖 Model: <b>{bootstrap.OPENROUTER_MODEL_NAME}</b> "
+        f"<code>{ss.or_model}</code><br>Every answer is written by this cost-efficient, "
+        "high-performance general-purpose model. The evidence it writes from comes from "
+        "the O*NET knowledge graph and never depends on the model.</div>",
+        unsafe_allow_html=True)
+    if st.button("Apply key", width="stretch"):
         if not key_input.strip():
             st.error("Enter an API key first.")
-        elif not model_choice:
-            st.error("Enter a model id.")
         else:
             ss.or_key = key_input.strip()
-            ss.or_model = model_choice
-            st.success(f"Using **{model_choice}**")
+            st.success(f"Key applied. Answers use **{bootstrap.OPENROUTER_MODEL_NAME}**.")
     configured = bool(ss.or_key)
     if not configured:
-        st.warning("Enter your OpenRouter API key and click **Apply model** "
+        st.warning("Enter your OpenRouter API key and click **Apply key** "
                    "to start chatting.")
-    else:
-        st.caption(f"Active: **{ss.or_model}**")
 
     st.subheader("Evidence budget")
     custom_budget = st.toggle(
@@ -388,9 +358,10 @@ def how_it_works_html() -> str:
          "— when you ask about AI — each occupation's AI exposure score. These records "
          "are the only material the AI model gets."),
         ("✅", "The AI writes from those facts — and we check it",
-         "The language model only writes the answer from the collected records and "
-         "cites each one; it does not choose the records. Whichever model you pick, "
-         "it is handed the same graph - only the wording and the citations differ. "
+         f"The language model ({bootstrap.OPENROUTER_MODEL_NAME}) only writes the answer "
+         "from the collected records and cites each one; it does not choose the "
+         "records. The graph it is handed is the same whoever asks and whatever model "
+         "writes - only the wording and the citations are the model's. "
          "Every citation is verified against the records it was shown, and the answer "
          "is labelled grounded, partially grounded or ungrounded. The sources, "
          "evidence and graphs are open to you under every answer."),
@@ -481,11 +452,11 @@ def render_answer(ans: Answer, idx: int, is_last: bool, entities: str | None = N
                       "higher)" if ans.exposure_in_evidence else "jobs are red")
             st.caption("The O*NET records retrieved for the occupation(s) you asked about. "
                        "They are pulled from the knowledge graph *before* the language "
-                       "model runs, so this graph - its records, nodes and layout - is "
-                       "the same whichever model you choose; the model only writes from "
-                       "it. **Red** = records this model cited in its answer · grey "
-                       "dashed = retrieved but not cited. ★ = the occupation you asked "
-                       f"about; {colors}. Click any node or edge for details.")
+                       "model runs, so this graph - its records, nodes and layout - does "
+                       "not depend on the model; the model only writes from it. **Red** "
+                       "= records the model cited in its answer · grey dashed = retrieved "
+                       "but not cited. ★ = the occupation you asked about; "
+                       f"{colors}. Click any node or edge for details.")
         else:
             st.info("No graph records were retrieved for this question.")
     with t_full:
@@ -537,7 +508,7 @@ def run_question(question: str, forced_seeds: list[str] | None, note: str | None
         ans = None
         if not configured:
             st.error("Enter your OpenRouter API key in the sidebar and click "
-                     "**Apply model** first.")
+                     "**Apply key** first.")
         else:
             with st.spinner("Retrieving evidence + generating..."):
                 try:

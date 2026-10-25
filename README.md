@@ -464,7 +464,10 @@ const {answer, citations, status, evidence} = await r.json();
   questions, the score methodology last. Clear chat starts a fresh session.
 - **Settings panel** — collapsing the sidebar leaves a labelled
   "Open settings panel" button in the top-left corner.
-- **Model choice** (sidebar) — any model in the OpenRouter catalog; the key
+- **Model** (sidebar) — fixed: every answer is written by GPT-6 Luna
+  (`openai/gpt-6-luna`), a cost-efficient, high-performance general-purpose
+  model, named under the API key box. (The HTTP API still accepts a `model`
+  per request; `OPENROUTER_MODEL` in `.env` changes the default.) The key
   and model are kept per browser session.
 
 ## How it works
