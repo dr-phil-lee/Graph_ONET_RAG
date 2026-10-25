@@ -24,9 +24,10 @@ from reportlab.lib.units import inch
 from reportlab.platypus import (Image, PageBreak, Paragraph, SimpleDocTemplate,
                                 Spacer, Table, TableStyle)
 
+import ai_exposure
 from graph_view import LABEL_COLORS
 
-TITLE = "O*NET Graph RAG"
+TITLE = "GraphRAG-Based O*NET Chatbot"
 SUBTITLE = "Results Report"
 NAVY = colors.HexColor("#10304F")
 ACCENT = colors.HexColor("#1D4ED8")
@@ -184,29 +185,19 @@ def _answer_flowables(i: int, ans, engine) -> list:
                 Paragraph(_esc(ans.raw[:1500]), S["ev"])]
         return out
 
-    method = getattr(ans, "exposure_method", None)
-    if method:
-        out.append(Paragraph("How the AI exposure scores are calculated", S["h"]))
-        out.append(Paragraph(_esc(method["summary"]), S["body"]))
-        out.append(Paragraph(_esc(method["formula"]), S["body"]))
-        for k, step in enumerate(method["steps"], 1):
-            out.append(Paragraph(f"{k}. " + _esc(step), S["note"]))
-        for r in ans.ai_exposure:
-            x = r.get("exposure")
-            if x:
-                out.append(Paragraph(_esc(f"{r['title']}: {x['calculation']}"), S["note"]))
-        out.append(Paragraph("References", S["h"]))
-        for k, ref in enumerate(method["references"], 1):
-            out.append(Paragraph(_esc(f"[{k}] {ref['citation']} {ref['url']}"), S["note"]))
     if getattr(ans, "headline", ""):
-        out += [Paragraph("Headline", S["h"]), Paragraph(_esc(ans.headline), S["answer"])]
-    if getattr(ans, "key_points", None):
-        out.append(Paragraph("Key points", S["h"]))
-        out += [Paragraph(_inline(p), S["mdli"], bulletText=f"{k}.")
-                for k, p in enumerate(ans.key_points, 1)]
+        out += [Paragraph("Answer", S["h"]), Paragraph(_inline(ans.headline), S["answer"])]
+    if ans.status == "ungrounded" or not ans.citations:
+        out.append(Paragraph(
+            "<b>Not based on O*NET evidence.</b> The model cited no retrieved record, so "
+            "this answer (including any occupations it names) comes from the model itself "
+            "and may not be relevant.", S["note"]))
+    elif getattr(ans, "unsupported_occupations", None):
+        out.append(Paragraph("<b>Listed without any cited evidence:</b> " +
+                             _esc(", ".join(ans.unsupported_occupations)) + ".", S["note"]))
     rows_x = _occupation_rows(ans)
     if rows_x:
-        out.append(Paragraph("Occupations and AI exposure", S["h"]))
+        out.append(Paragraph("Occupations", S["h"]))
         tbl = Table(rows_x, colWidths=[2.15 * inch, 0.85 * inch, 0.45 * inch, 0.6 * inch,
                                        0.6 * inch, 1.85 * inch], repeatRows=1)
         tbl.setStyle(TableStyle([
@@ -216,13 +207,12 @@ def _answer_flowables(i: int, ans, engine) -> list:
             ("LEFTPADDING", (0, 0), (-1, -1), 3), ("RIGHTPADDING", (0, 0), (-1, -1), 3),
         ]))
         out.append(tbl)
-        import ai_exposure
         out.append(Paragraph(
             _esc(f"AI exposure: {ai_exposure.SOURCE_CITATION}. {ai_exposure.SOURCE_NOTE} "
                  "Score 0 = fully protected, 1 = fully exposed."), S["note"]))
 
     a = ans.parsed.get("answer")
-    out.append(Paragraph("Answer", S["h"]))
+    out.append(Paragraph("Full answer", S["h"]))
     if isinstance(a, list):
         for x in a:
             out.append(Paragraph(_inline(x), S["mdli"], bulletText="•"))
@@ -296,6 +286,28 @@ def _answer_flowables(i: int, ans, engine) -> list:
                 f"({len(ans.evidence) - len(shown)} more evidence lines omitted; "
                 "cited lines are shown first.)", S["note"]))
 
+    method = ans.exposure_method if getattr(ans, "ai_relevant", False) else None
+    if method:
+        out.append(Paragraph("About the AI exposure score", S["h"]))
+        out.append(Paragraph(_esc(method["meaning"]), S["body"]))
+        out.append(Paragraph("<b>How it is calculated.</b> " + _esc(method["summary"]) +
+                             _esc(f" Scores are taken from the {ai_exposure.SOURCE_NAME} "
+                                  "(third-party, not part of O*NET) and matched to each "
+                                  "O*NET occupation by SOC code and title."), S["body"]))
+        out.append(Paragraph(_esc(method["formula"]), S["body"]))
+        for r in ans.ai_exposure:
+            x = r.get("exposure")
+            if x:
+                out.append(Paragraph(_esc(f"{r['title']}: {x['calculation']}"), S["note"]))
+        missing = [r["title"] for r in ans.ai_exposure if not r.get("exposure")]
+        if missing:
+            out.append(Paragraph(_esc("Not covered by the index: " + ", ".join(missing)), S["note"]))
+        for k, lim in enumerate(method["limitations"], 1):
+            out.append(Paragraph(_esc(lim), S["note"], bulletText="-"))
+        out.append(Paragraph("References", S["h"]))
+        for k, ref in enumerate(method["references"], 1):
+            out.append(Paragraph(_esc(f"[{k}] {ref['citation']} {ref['url']}"), S["note"]))
+
     u = ans.usage
     out.append(Paragraph(
         f"Context {ans.context_tokens} tokens | input {u.get('input_tokens')} / "
@@ -368,3 +380,119 @@ def build_pdf(answers: list, engine, backend_desc: str, budget: int) -> bytes:
                             author="O*NET Graph RAG")
     doc.build(story)
     return buf.getvalue()
+
+
+# ------------------------------------------------------------ Markdown report
+def _md_cites(text) -> str:
+    """Citation ids as inline code so they stand out in any Markdown viewer."""
+    return _CIT.sub(lambda m: " ".join(f"`{i.strip()}`" for i in m.group(1).split(",")),
+                    str(text if text is not None else ""))
+
+
+def _md_cell(text) -> str:
+    return _md_cites(text).replace("|", "\\|").replace("\n", " ")
+
+
+def _answer_markdown(i: int, ans, engine) -> list[str]:
+    out = [f"## Q{i}. {ans.question.strip()}", ""]
+    if ans.parsed is None:
+        out += ["The model reply was not valid JSON:", "", "```", ans.raw[:1500], "```", ""]
+        return out
+    if ans.standalone_question and ans.standalone_question.strip() != ans.question.strip():
+        out += [f"_Read with the conversation as: {ans.standalone_question.strip()}_", ""]
+    if ans.headline:
+        out += [f"> **{_md_cites(ans.headline)}**", ""]
+    if ans.status == "ungrounded" or not ans.citations:
+        out += ["> ⚠️ **Not based on O*NET evidence.** The model cited no retrieved record, "
+                "so this answer (including any occupations it names) comes from the model "
+                "itself and may not be relevant.", ""]
+    elif ans.unsupported_occupations:
+        out += ["> ⚠️ Listed without any cited evidence: " +
+                ", ".join(ans.unsupported_occupations) + ".", ""]
+    show_x = ans.exposure_in_evidence
+    if ans.occupations:
+        out += ["### Occupations", "",
+                "| Occupation | O*NET-SOC | Job Zone | Related | "
+                + ("AI exposure | " if show_x else "") + "Fit | Evidence cited |",
+                "|---|---|---|---|" + ("---|" if show_x else "") + "---|---|"]
+        for c in ans.occupations:
+            x = c.get("ai_exposure")
+            out.append("| " + " | ".join([
+                _md_cell(c["title"]), c["soc"], str(c.get("job_zone") or "n/a"),
+                f"#{c['related_rank']}" if c.get("related_rank") else "",
+                *([f"{x['composite']:.2f}" if x else "not in index"] if show_x else []),
+                _md_cell(c.get("fit") or ""),
+                " ".join(f"`{s}`" for s in c.get("citations") or []) or "none"]) + " |")
+        out.append("")
+    a = ans.parsed.get("answer")
+    out += ["### Answer", ""]
+    if isinstance(a, list):
+        out += [f"- {_md_cites(x)}" for x in a]
+    elif isinstance(a, bool):
+        out.append("**Yes**" if a else "**No**")
+    elif a is not None:
+        out.append(_md_cites(a).strip())
+    out.append("")
+    if ans.parsed.get("reasoning"):
+        out += [f"_Reasoning: {_md_cites(ans.parsed['reasoning'])}_", ""]
+    if ans.seeds:
+        names = ", ".join(f"{engine.node_info(s)[0]} ({s})" for s in ans.seeds)
+        out += [f"**Graph entities used:** {names}", ""]
+    if ans.sources:
+        out += [f"### Sources ({len(ans.sources)} records cited, verified against the evidence)", ""]
+        out += [f"- `{s['id']}` {_md_cell(s['statement'][:300])} — _{s['dataset']}, {s['table']}_"
+                for s in ans.sources] + [""]
+    if ans.invalid_citations:
+        out += ["Citations NOT found in the evidence: " + ", ".join(map(str, ans.invalid_citations)), ""]
+    if ans.evidence:
+        shown = sorted(ans.evidence, key=lambda t: not t[2])[:45]
+        out += [f"### Evidence provided to the model ({len(ans.evidence)} lines; ✓ = cited)", "",
+                "| ✓ | ID | Statement |", "|:-:|---|---|"]
+        for uid, text, cited in shown:
+            body = text[len(uid) + 3:] if text.startswith(f"[{uid}] ") else text
+            out.append(f"| {'✓' if cited else ''} | `{uid}` | {_md_cell(body[:320])} |")
+        if len(ans.evidence) > len(shown):
+            out.append(f"| | | _{len(ans.evidence) - len(shown)} more lines omitted (cited lines first)_ |")
+        out.append("")
+    method = ans.exposure_method if ans.ai_relevant else None
+    if method:
+        out += ["### About the AI exposure score", "", method["meaning"], "",
+                "**How it is calculated.** " + method["summary"], "",
+                f"`{method['formula']}`", ""]
+        for r in ans.ai_exposure:
+            x = r.get("exposure")
+            if x:
+                out.append(f"- {r['title']}: `{x['calculation']}`")
+        missing = [r["title"] for r in ans.ai_exposure if not r.get("exposure")]
+        if missing:
+            out.append("- Not covered by the index: " + ", ".join(missing))
+        out += ["", "**References**", ""]
+        out += [f"{k}. {ref['citation']} <{ref['url']}>"
+                for k, ref in enumerate(method["references"], 1)] + [""]
+    u = ans.usage
+    out += [f"_Grounding: {ans.status} · model {ans.model or 'n/a'} · context "
+            f"{ans.context_tokens} tokens · in {u.get('input_tokens')} / out "
+            f"{u.get('output_tokens')} tokens · {u.get('latency_s', 0):.1f}s_", ""]
+    return out
+
+
+def build_markdown(answers: list, engine, backend_desc: str, budget: int) -> str:
+    """The whole session as one Markdown document (same content as the PDF:
+    every answer with its occupations, sources, evidence and - for AI
+    questions - the score methodology)."""
+    lines = [f"# {TITLE} — {SUBTITLE}", "",
+             f"Generated {datetime.datetime.now():%Y-%m-%d %H:%M} · LLM: {backend_desc} · "
+             f"evidence budget {budget} tokens · O*NET 30.3 knowledge graph: "
+             f"{engine.G.number_of_nodes():,} nodes / {engine.G.number_of_edges():,} edges", "",
+             "Graph-grounded question answering over the O*NET occupational database. Every "
+             "answer is retrieved by traversing the knowledge graph and cited to individual "
+             "database records; each citation is verified against the evidence the model saw.",
+             "",
+             "Data: O*NET 30.3 Database, U.S. Department of Labor / ETA (CC BY 4.0). O*NET® is a "
+             "trademark of USDOL/ETA; this tool is not reviewed or endorsed by USDOL/ETA. "
+             "AI exposure: " + ai_exposure.SOURCE_CITATION +
+             " (third-party index, not part of O*NET).", "", "---", ""]
+    for i, ans in enumerate(answers, 1):
+        lines += _answer_markdown(i, ans, engine)
+        lines += ["---", ""]
+    return "\n".join(lines)

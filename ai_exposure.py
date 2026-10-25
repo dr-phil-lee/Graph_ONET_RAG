@@ -76,6 +76,14 @@ VARIABLES: list[tuple[str, str, str, str, str]] = [
      "Physical", "higher = more protected"),
 ]
 
+# Plain-language meaning of the score, shown before any calculation detail.
+MEANING = ("The AI exposure score shows how much of an occupation's day-to-day work "
+           "is exposed to AI-driven task automation. 0 means the work is largely "
+           "shielded from it (hands-on, physical or face-to-face work); 1 means most "
+           "of the work is the kind of digital, computer-based activity that today's AI "
+           "can do or strongly assist. It measures exposure of tasks, not whether the "
+           "job will disappear or how fast employers will adopt AI.")
+
 METHOD_STEPS: list[str] = [
     "Take nine O*NET 31.0 ratings (1-5) for each occupation: 5 Work Activities "
     "and 4 Work Context items, as reported by incumbent workers and analysts.",
@@ -249,7 +257,8 @@ def default_index() -> AIExposureIndex:
 
 def methodology() -> dict:
     """How the scores are computed, with the references behind them."""
-    return {"summary": ("Each occupation's AI exposure score comes from nine O*NET 31.0 "
+    return {"meaning": MEANING,
+            "summary": ("Each occupation's AI exposure score comes from nine O*NET 31.0 "
                         "work-activity and work-context ratings: digital work intensity "
                         "raises exposure, human contact and physical task intensity "
                         "lower it, combined with equal weights on a 0-1 scale "

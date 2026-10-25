@@ -5,9 +5,21 @@ Run:  streamlit run app.py   (from the Chatbot folder, inside .venv)
 The ChatEngine (graph + linker) is a process-wide cached resource; the
 OpenRouter key, model and evidence budget live in st.session_state and are
 passed per question, so two browser sessions never share a key.
+
+Flow of one question:
+  1. the occupations in the question are resolved; when none exists in
+     O*NET under that exact title, the closest O*NET occupations are shown
+     and the user confirms (or picks another) before anything is generated;
+  2. evidence is retrieved from the graph and the model answers from it;
+  3. the answer is rendered as six views (Answer, Focus graph, Evidence
+     graph, Sources, Evidence, Charts); the Answer view holds the grounding
+     notice, headline, answer text and occupation cards. Below the views a
+     collapsed "Do you want to know about AI exposure score?" panel explains
+     the score (only for questions about AI).
 """
 from __future__ import annotations
 
+import datetime as _dt
 import html as _html
 import os
 
@@ -18,48 +30,85 @@ import ai_exposure
 import answer_view as av
 from engine import Answer, ChatEngine
 
-st.set_page_config(page_title="O*NET Graph RAG", page_icon="🧭",
-                   layout="wide")
-
-ACCENT = "#2563EB"
+ss = st.session_state
+st.set_page_config(page_title="GraphRAG-Based O*NET Chatbot", page_icon="🧭", layout="wide",
+                   initial_sidebar_state="expanded")
 
 st.markdown(
     """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* ---- layout: one readable column, like a chat app ---- */
+.block-container {padding-top: .9rem; padding-bottom: 6rem; max-width: 1340px;}
+[data-testid="stBottomBlockContainer"] {max-width: 1340px;}
+[data-testid="stBottomBlockContainer"] [data-testid="stChatInput"] {max-width: 67%;}
+h1, h2, h3 {letter-spacing: -0.01em;}
+div[data-testid="stCaptionContainer"] {opacity: 1 !important;}
+div[data-testid="stCaptionContainer"], div[data-testid="stCaptionContainer"] p,
+  div[data-testid="stCaptionContainer"] *, .stCaption, small {color: #374151 !important;}
+div[data-testid="stChatMessage"] {border-radius: 14px; padding: .6rem .9rem;}
+div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarUser"])
+  {background: #F3F4F6;}
 
-/* ---- global polish ---- */
-html, body, [class*="css"] {font-family: "Inter", "Segoe UI", sans-serif;}
-.block-container {padding-top: 1.2rem; max-width: 1250px;}
-h1, h2, h3 {font-family: "Inter", "Segoe UI", sans-serif;
-  letter-spacing: -0.01em;}
+/* ---- sidebar: once collapsed, the control that re-opens it is a clearly
+   labelled button in the top-left corner (Streamlit's own is a faint icon) ---- */
+[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapsedControl"]
+  {opacity: 1 !important; visibility: visible !important; display: inline-flex !important;
+   align-items: center; gap: .3rem; background: #2563EB !important; color: #fff !important;
+   border: 0; border-radius: 999px; padding: .3rem .8rem .3rem .55rem;
+   box-shadow: 0 2px 10px rgba(37,99,235,.35);}
+[data-testid="stExpandSidebarButton"] span, [data-testid="stSidebarCollapsedControl"] span
+  {color: #fff !important;}
+[data-testid="stExpandSidebarButton"]::after {content: "Open settings panel";
+  font-size: .85rem; font-weight: 700; color: #fff; white-space: nowrap;}
+section[data-testid="stSidebar"] h3 {font-size: .8rem; text-transform: uppercase;
+  letter-spacing: .8px; color: #374151; margin-top: .6rem;}
 
-/* ---- hero header ---- */
-.hero {
-  background:
-    radial-gradient(1100px 240px at 12% -40%, rgba(56,189,248,.28), transparent 60%),
-    linear-gradient(120deg, #0B1F33 0%, #10304F 62%, #123A5E 100%);
-  color: #ffffff; padding: 1.35rem 1.7rem 1.25rem; border-radius: 16px;
-  border: 1px solid rgba(148,197,255,.18);
-  box-shadow: 0 8px 26px rgba(9, 30, 55, 0.28);
-}
-.hero .brand {display:flex; align-items:baseline; gap:.6rem;}
-.hero .title {font-size: 1.62rem; font-weight: 800; letter-spacing: -.02em;
-  line-height: 1.25;}
-.hero .title .thin {font-weight: 400; opacity: .8;}
-.hero .tagline {font-size: .95rem; opacity: .82; margin-top: .2rem;
-  line-height: 1.5; max-width: 46rem;}
-.hero .chips {margin-top: .7rem; display:flex; flex-wrap:wrap; gap:.4rem;}
-.hero .chip {font-size: .74rem; font-weight: 600; letter-spacing: .4px;
-  text-transform: uppercase; color: #BAD9FF;
-  background: rgba(96,165,250,.14); border: 1px solid rgba(96,165,250,.4);
-  padding: .16rem .62rem; border-radius: 999px;}
+/* ---- top bar ---- */
+.topbar {display:flex; align-items:baseline; gap:.2rem .6rem; padding:.1rem 0 .4rem; flex-wrap:wrap;}
+.topbar .t {font-size: 1.55rem; font-weight: 800; letter-spacing: -.02em; white-space: nowrap;}
+.topbar .s {font-size: .95rem; color: #4B5563; flex-basis: 100%;}
+.st-key-topbtn-report button, .st-key-topbtn-clear button {white-space: nowrap;}
+
+/* ---- landing ---- */
+.landing {text-align:center; padding: 2.6rem 0 1.4rem;}
+.landing .g {font-size: 2.3rem; font-weight: 800; letter-spacing: -.025em; line-height: 1.2;}
+.landing .d {font-size: 1.12rem; color: #374151; margin: .8rem auto 0; line-height: 1.6;
+  max-width: 46rem;}
+.landing .d2 {font-size: 1.12rem; color: #111827; margin-top: .7rem; font-weight: 600;}
+.landing .d b {color: #111827;}
+
+/* ---- info bar (right column): reference panels, apart from the chat ---- */
+div[data-testid="stColumn"]:has(.st-key-infobar) {position: sticky; top: 3.2rem;
+  align-self: flex-start; max-height: calc(100vh - 8.5rem); overflow-y: auto;}
+.st-key-infobar {border: 1px solid #D1D5DB; border-radius: 14px; background: #F9FAFB;
+  padding: .8rem .85rem .4rem; font-size: .93rem;}
+.infobar-title {font-size: 1.05rem; font-weight: 800; color: #111827;}
+.infobar-sub {font-size: .86rem; color: #4B5563; line-height: 1.45; margin: .2rem 0 .6rem;}
+.st-key-infobar details {background: #fff;}
+.st-key-infobar .how .flow {flex-direction: column;}
+.st-key-infobar .how .arrow {transform: rotate(90deg); padding: .1rem 0;}
+.st-key-infobar .method {margin-top: .2rem;}
+.st-key-infobar .method .dims {flex-direction: column;}
+
+/* ---- "how it is built" explainer ---- */
+.how .intro {font-size: .95rem; line-height: 1.55; color: #1F2937; margin-bottom: .8rem;}
+.how .flow {display:flex; gap:.35rem; align-items:stretch; flex-wrap:wrap;}
+.how .st {flex:1 1 150px; border:1px solid #D1D5DB; border-radius:14px; padding:.75rem .8rem;
+  background:#F9FAFB; min-width: 150px;}
+.how .st .n {display:inline-flex; width:1.6rem; height:1.6rem; border-radius:50%;
+  background:#2563EB; color:#fff; font-size:.8rem; font-weight:800; align-items:center;
+  justify-content:center; margin-right:.4rem;}
+.how .st .ic {font-size:1.35rem; vertical-align:middle;}
+.how .st .t {display:block; font-weight:800; font-size:.95rem; margin:.45rem 0 .3rem; color:#111827;}
+.how .st .d {font-size:.84rem; line-height:1.5; color:#1F2937;}
+.how .arrow {align-self:center; font-size:1.3rem; color:#2563EB; font-weight:800; padding:0;}
+.how .src {margin-top:.7rem; font-size:.78rem; color:#4B5563; line-height:1.5;}
+@media (max-width: 900px) {.how .arrow {display:none;}}
 
 /* ---- answer views: tabs drawn as clickable pills ---- */
 .view-hint {display:flex; align-items:center; gap:.55rem; flex-wrap:wrap;
-  margin: 1rem 0 .35rem; padding: .55rem .85rem; border-radius: 12px;
-  background: linear-gradient(90deg, rgba(37,99,235,.10), rgba(37,99,235,.03));
-  border: 1px solid rgba(37,99,235,.28); font-size: .9rem;}
+  margin: 1rem 0 .35rem; padding: .5rem .85rem; border-radius: 12px;
+  background: #EFF4FF; border: 1px solid #BFD3FF; font-size: .9rem; color:#111827;}
 .view-hint b {color: #1D4ED8;}
 .view-hint .arrow {font-size: 1.15rem; animation: nudge 1.4s ease-in-out infinite;}
 @keyframes nudge {0%,100% {transform: translateY(0);} 50% {transform: translateY(4px);}}
@@ -77,57 +126,24 @@ h1, h2, h3 {font-family: "Inter", "Segoe UI", sans-serif;
 .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"],
   .stTabs .react-aria-SelectionIndicator {display: none;}
 
+/* ---- confirmation card ---- */
+.confirm {border:1px solid #F59E0B; border-left:6px solid #F59E0B; border-radius:14px;
+  padding:.75rem 1rem .6rem; background:#FFFBEB; margin:.2rem 0 .6rem; color:#111827;}
+.confirm .lbl {font-size:.7rem; font-weight:800; letter-spacing:.9px; text-transform:uppercase;
+  color:#B45309;}
+.confirm .q {font-size:1rem; font-weight:650; margin:.25rem 0 .2rem;}
+.confirm .d {font-size:.9rem; line-height:1.5;}
+
 /* ---- buttons ---- */
-.stDownloadButton button {background: #1D4ED8; color: #fff; border: 0;
-  font-weight: 600; box-shadow: 0 2px 8px rgba(29,78,216,.28);}
-.stDownloadButton button:hover {background: #2563EB; color: #fff;}
-.stButton button[kind="secondary"] {border-radius: 8px;}
+.stDownloadButton button {font-weight: 600;}
+.stButton button[kind="secondary"] {border-radius: 10px;}
 
 /* ---- metrics ---- */
 div[data-testid="stMetric"] {background: rgba(37,99,235,.05);
-  border: 1px solid rgba(37,99,235,.16); border-radius: 12px;
-  padding: .5rem .75rem;}
-div[data-testid="stMetric"] label {color: #5B7290; font-size: .78rem;
-  text-transform: uppercase; letter-spacing: .5px;}
-div[data-testid="stMetricValue"] {font-weight: 700;}
-
-/* ---- chat & content cards ---- */
-div[data-testid="stChatMessage"] {border-radius: 14px;}
-details {border-radius: 10px;}
-
-/* ---- sidebar ---- */
-section[data-testid="stSidebar"] h1 {font-size: 1.18rem; color: #1D4ED8;
-  letter-spacing: -.01em;}
-section[data-testid="stSidebar"] h3 {font-size: .8rem; text-transform: uppercase;
-  letter-spacing: .8px; color: #5B7290; margin-top: .6rem;}
-
-/* ---- "how it is built" panel ---- */
-.how {border: 1px solid rgba(120,130,150,.25); border-radius: 16px;
-  padding: 1rem 1.1rem .8rem; margin: .3rem 0 1rem; background: rgba(37,99,235,.03);}
-.how .h {font-size: 1.05rem; font-weight: 750; margin-bottom: .15rem;}
-.how .sub {font-size: .86rem; color: #5B6B82; line-height: 1.5; margin-bottom: .75rem;}
-.how .steps {display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: .6rem;}
-.how .step {border: 1px solid rgba(120,130,150,.22); border-radius: 12px;
-  padding: .65rem .75rem; background: rgba(255,255,255,.55); font-size: .8rem;
-  line-height: 1.45; color: inherit;}
-.how .step .n {display:inline-flex; width:1.35rem; height:1.35rem; border-radius:50%;
-  background:#2563EB; color:#fff; font-size:.72rem; font-weight:700;
-  align-items:center; justify-content:center; margin-right:.35rem;}
-.how .step .t {font-weight: 700; font-size: .88rem;}
-.how .step .d {margin-top: .3rem; color: #475569;}
-.how .schema {margin-top: .75rem; font: .76rem/1.6 ui-monospace, Consolas, monospace;
-  background: rgba(15,23,42,.05); border-radius: 10px; padding: .5rem .7rem;
-  white-space: pre-wrap; color: #334155;}
-.how .src {margin-top: .5rem; font-size: .74rem; color: #6B7A90;}
-@media (prefers-color-scheme: dark) {
-  .how .step {background: rgba(255,255,255,.03);}
-  .how .step .d, .how .sub, .how .schema {color: #CBD5E1;}
-}
+  border: 1px solid rgba(37,99,235,.16); border-radius: 12px; padding: .5rem .75rem;}
 
 /* ---- footer ---- */
-.app-footer {font-size: .78rem; color: #8A97A8; line-height: 1.6;
-  padding-top: .2rem;}
+.app-footer {font-size: .78rem; color: #4B5563; line-height: 1.6; padding-top: .2rem;}
 </style>
 """,
     unsafe_allow_html=True)
@@ -169,18 +185,30 @@ def openrouter_models() -> list[str]:
 
 
 # -------------------------------------------------------- session defaults
-ss = st.session_state
 ss.setdefault("messages", [])
 ss.setdefault("or_key", os.getenv("OPENROUTER_API_KEY", "").strip())
 ss.setdefault("or_model", bootstrap.OPENROUTER_DEFAULT_MODEL)
 ss.setdefault("use_memory", True)
 ss.setdefault("memory_from", 0)      # answers before this index are forgotten
+ss.setdefault("pending_confirm", None)   # {"question", "terms"} awaiting the user
+
+
+def _all_answers() -> list[Answer]:
+    return [m["answer"] for m in ss.messages if m.get("answer") is not None]
+
+
+def memory_history() -> list[dict]:
+    """Turns the next question may refer to (after the last 'forget')."""
+    if not ss.use_memory:
+        return []
+    return [a.memory_turn() for a in _all_answers()[ss.memory_from:]]
+
 
 # ----------------------------------------------------------------- sidebar
 with st.sidebar:
-    st.title("O*NET Graph RAG")
-    st.caption("Answers cite O*NET 30.3 knowledge-graph edges. English questions "
-               "work best.")
+    st.markdown("### 🧭 O*NET Graph RAG")
+    st.caption("Answers are built only from O*NET 30.3 records and cited. "
+               "English questions work best.")
 
     st.subheader("Model (OpenRouter)")
     key_input = st.text_input(
@@ -209,17 +237,29 @@ with st.sidebar:
         st.warning("Enter your OpenRouter API key and click **Apply model** "
                    "to start chatting.")
     else:
-        st.caption(f"Active: **OpenRouter: {ss.or_model}**")
+        st.caption(f"Active: **{ss.or_model}**")
 
-    st.subheader("Retrieval")
-    budget = st.slider("Evidence budget (tokens)", 1000, 4000,
-                       bootstrap.DEFAULT_CONTEXT_BUDGET, step=500,
-                       help="How much graph evidence is placed in front of "
-                            "the model per question.")
+    st.subheader("Evidence budget")
+    custom_budget = st.toggle(
+        "Custom amount", value=False,
+        help=f"Type any amount up to {bootstrap.MAX_CONTEXT_BUDGET:,} tokens "
+             "instead of using the slider.")
+    if custom_budget:
+        budget = int(st.number_input(
+            "Tokens of O*NET evidence per question",
+            min_value=bootstrap.MIN_CONTEXT_BUDGET, max_value=bootstrap.MAX_CONTEXT_BUDGET,
+            value=bootstrap.DEFAULT_CONTEXT_BUDGET, step=500))
+    else:
+        budget = st.slider("Tokens of O*NET evidence per question", 1000,
+                           bootstrap.BUDGET_SLIDER_MAX, bootstrap.DEFAULT_CONTEXT_BUDGET,
+                           step=500)
+    st.caption("More evidence = fuller answers, slower and costlier replies. Your model "
+               "must accept the context size.")
     auto_link = st.toggle(
         "Auto-match occupations from wording", value=True,
-        help="Fuzzy-match words like 'nurses' or 'data analyst' to O*NET "
-             "titles when the exact entity linker finds nothing.")
+        help="Match words like 'nurses' or 'data analyst' to O*NET titles. When the "
+             "match is not exact you are asked to confirm before the answer is "
+             "generated.")
 
     st.subheader("🧠 Conversation memory")
     ss.use_memory = st.toggle(
@@ -228,8 +268,8 @@ with st.sidebar:
              "'what does the second one do?' are read with the previous turns: the "
              "question is rewritten into a standalone one and the occupations in "
              "focus carry over. Memory is context only, never cited as evidence.")
-    _all_answers = [m["answer"] for m in ss.messages if m.get("answer") is not None]
-    _remembered = _all_answers[ss.memory_from:] if ss.use_memory else []
+    _answers_all = _all_answers()
+    _remembered = _answers_all[ss.memory_from:] if ss.use_memory else []
     if _remembered:
         _focus = []
         for _a in _remembered[-4:]:
@@ -239,109 +279,108 @@ with st.sidebar:
         st.caption(f"Remembering **{len(_remembered)}** turn(s); the last "
                    f"{min(4, len(_remembered))} are sent with each question.")
         if _focus:
-            st.markdown(" ".join(f"<span class='chip'>{_t}</span>" for _t in _focus[:12]),
-                        unsafe_allow_html=True)
+            st.markdown(" ".join(f"<span class='chip'>{_html.escape(_t)}</span>"
+                                 for _t in _focus[:12]), unsafe_allow_html=True)
         if st.button("Forget memory (keep transcript)", width="stretch"):
-            ss.memory_from = len(_all_answers)
+            ss.memory_from = len(_answers_all)
             st.rerun()
     elif ss.use_memory:
         st.caption("Nothing remembered yet — ask a question.")
 
-backend_desc = f"OpenRouter: {ss.or_model}"
+    backend_desc = f"OpenRouter: {ss.or_model}"
 
-# ---------------------------------------------------------------- header
-_head, _pdf = st.columns([4.4, 1], vertical_alignment="center")
-with _head:
-    _n_nodes = engine.G.number_of_nodes()
-    _n_edges = engine.G.number_of_edges()
-    st.markdown(
-        f"""
-<div class="hero">
-  <div class="brand">
-    <div class="title">🧭 O*NET Graph RAG
-      <span class="thin">· Occupational Intelligence</span></div>
-  </div>
-  <div class="tagline">Ask anything about occupations, tasks, skills, and
-    work activities. Every answer is retrieved by traversing the O*NET
-    knowledge graph and cited to individual database records — and every
-    citation is verified against the evidence the model saw.</div>
-  <div class="chips">
-    <span class="chip">O*NET 30.3 · May 2026</span>
-    <span class="chip">{_n_nodes:,} nodes</span>
-    <span class="chip">{_n_edges:,} edges</span>
-    <span class="chip">{len(engine.occupations)} occupations</span>
-    <span class="chip">Verified citations</span>
-    <span class="chip">AI Exposure Index</span>
-    <span class="chip">Conversation memory</span>
-  </div>
-</div>
-""",
-        unsafe_allow_html=True)
-with _pdf:
-    _answers = [m["answer"] for m in ss.messages if m.get("answer") is not None]
-    if _answers:
-        _sig = (len(_answers), tuple(a.question for a in _answers))
-        if ss.get("pdf_sig") != _sig:
-            import report
-
-            with st.spinner("Preparing PDF..."):
-                ss.pdf_bytes = report.build_pdf(_answers, engine, backend_desc, budget)
-                ss.pdf_sig = _sig
-        import datetime as _dt
+# ------------------------------------------- top bar: title · report · clear
+_c_title, _c_report, _c_clear = st.columns([5.6, 1.6, 1.3], vertical_alignment="center")
+with _c_title:
+    st.markdown("<div class='topbar'><span class='t'>🧭 GraphRAG-Based O*NET Chatbot</span>"
+                "<span class='s'>Occupations, skills and AI exposure, answered from "
+                "O*NET records with verified citations</span></div>",
+                unsafe_allow_html=True)
+with _c_report, st.container(key="topbtn-report"):
+    if _answers_all:
+        import report
 
         st.download_button(
-            f"📄 PDF Report ({len(_answers)})",
-            data=ss.pdf_bytes,
+            f"⬇️ Report (PDF, {len(_answers_all)})",
+            data=report.build_pdf(_answers_all, engine, backend_desc, budget),
             file_name=f"onet_graphrag_report_{_dt.date.today():%Y%m%d}.pdf",
             mime="application/pdf", width="stretch",
-            help="Save all answers in this session as a formatted PDF report.")
+            help="Every answer in this session - headline, occupations, the full "
+                 "answer, sources and evidence - as one PDF file.")
     else:
-        st.button("📄 PDF Report", disabled=True, width="stretch",
+        st.button("⬇️ Report (PDF)", disabled=True, width="stretch",
                   help="Ask a question first — then one click saves the report.")
-    if _answers:
-        import json as _json
-
-        st.download_button(
-            "💾 Export chat (JSON)",
-            data=_json.dumps({"model": backend_desc,
-                              "turns": [a.to_dict() for a in _answers]},
-                             ensure_ascii=False, indent=2),
-            file_name="onet_graphrag_conversation.json", mime="application/json",
-            width="stretch",
-            help="Every answer with its structured fields, citations, sources, "
-                 "AI-exposure rows and evidence.")
-    if st.button("🗑️ Clear chat", width="stretch",
-                 disabled=not ss.messages,
+with _c_clear, st.container(key="topbtn-clear"):
+    if st.button("🗑️ Clear chat", width="stretch", disabled=not ss.messages,
                  help="Delete every question and answer in this session "
                       "and start fresh (also clears the memory)."):
         ss.messages = []
         ss.memory_from = 0
-        for _k in ("pdf_bytes", "pdf_sig", "_html_cache", "pending_question"):
+        ss.pending_confirm = None
+        for _k in ("_html_cache", "pending_question"):
             ss.pop(_k, None)
         st.rerun()
 
-_STATUS_NOTE = {
-    "grounded": None,
-    "partially_grounded": ("warning", "Some citations the model returned do not "
-                                      "exist in the evidence it was shown; only the "
-                                      "valid ones are highlighted."),
-    "ungrounded": ("warning", "The model cited no evidence, so this answer is "
-                              "NOT grounded in O*NET records. Treat it as "
-                              "unverified."),
-    "truncated": ("info", "⚠️ The reply hit the output-token limit and was cut "
-                          "off — showing the recovered partial answer. The list "
-                          "below may be incomplete."),
-}
+
+# ------------------------------------------------------------- explainer
+@st.cache_data(show_spinner=False)
+def how_it_works_html() -> str:
+    """Plain-language explainer: four steps, numbers read from the loaded graph."""
+    meta = engine.graph_stats()
+    n_nodes = meta.get("nodes_total", 0)
+    n_edges = meta.get("edges_total", 0)
+    n_jobs = len(engine.occupations)
+    steps = [
+        ("🗺️", "O*NET becomes a map",
+         f"O*NET is the U.S. Department of Labor's database of occupations. We load it as "
+         f"one connected map: {n_jobs} occupations linked to their tasks, skills, "
+         f"abilities, knowledge, related occupations and software — {n_nodes:,} points "
+         f"and {n_edges:,} connections. Every connection is one O*NET record with its "
+         "own id."),
+        ("🔎", "Your question is placed on the map",
+         "We find the occupations, skills or activities you mention — by their O*NET "
+         "titles, common alternate names (\"RN\", \"high school teacher\") or close "
+         "matches. If there is no exact O*NET occupation for what you typed, we show "
+         "the closest ones and ask you to confirm before going on."),
+        ("🧩", "We collect the facts around them",
+         "Starting from those points we walk the map and gather the O*NET records that "
+         "matter for your question: tasks, importance ratings, related occupations, and "
+         "— when you ask about AI — each occupation's AI exposure score. These records "
+         "are the only material the AI model gets."),
+        ("✅", "The AI writes from those facts — and we check it",
+         "The language model answers using only the collected records and cites each "
+         "one. Every citation is verified against the records it was shown, and the "
+         "answer is labelled grounded, partially grounded or ungrounded. The sources, "
+         "evidence and graphs are open to you under every answer."),
+    ]
+    cards = []
+    for i, (ic, t, d) in enumerate(steps, 1):
+        cards.append(f"<div class='st'><span class='n'>{i}</span><span class='ic'>{ic}</span>"
+                     f"<span class='t'>{_html.escape(t)}</span>"
+                     f"<div class='d'>{_html.escape(d)}</div></div>")
+        if i < len(steps):
+            cards.append("<div class='arrow'>➜</div>")
+    return f"""
+<div class="how">
+  <div class="intro"><b>Graph RAG</b> means the chatbot does not search the web or rely
+    on what the AI model remembers. It looks things up in a map built from the O*NET
+    database, hands the model only what it found, and shows you the records.</div>
+  <div class="flow">{''.join(cards)}</div>
+  <div class="src">Data: O*NET {meta.get('onet_release', '30.3')} Database, U.S. Department
+    of Labor / ETA (CC BY 4.0). AI exposure scores: {_html.escape(ai_exposure.SOURCE_CITATION)}
+    (a third-party index, not part of O*NET).</div>
+</div>"""
+
+
 _STATUS_BADGE = {"grounded": ("✅ grounded", "#2E7D5B"),
-                 "partially_grounded": ("⚠️ partially grounded", "#C9A227"),
+                 "partially_grounded": ("⚠️ partially grounded", "#B7791F"),
                  "ungrounded": ("⛔ ungrounded", "#B23A3A"),
                  "truncated": ("✂️ truncated", "#D9822B"),
-                 "unparsed": ("❓ unparsed", "#6B7280")}
+                 "unparsed": ("❓ unparsed", "#4B5563")}
 
 
 def _embed(html: str, height: int) -> None:
-    """Interactive pyvis page (graph data only, no model text). st.iframe on
-    current Streamlit; components.html on releases that predate it."""
+    """Interactive pyvis page (graph data only, no model text)."""
     if hasattr(st, "iframe"):
         st.iframe(html, height=height)
     else:  # pragma: no cover - older Streamlit
@@ -359,19 +398,14 @@ def _cached_html(ans: Answer, kind: str, build):
     return cache[key]
 
 
-def render_answer(ans: Answer, idx: int, is_last: bool):
+def render_answer(ans: Answer, idx: int, is_last: bool, entities: str | None = None):
+    """The six views come first; everything that makes up the response
+    (grounding notice, headline, the answer text, occupation cards) lives
+    under the Answer view, so the reply opens on one clean tab strip."""
     if ans.parsed is None:
         st.warning("The model reply was not valid JSON; raw output below.")
         st.code(ans.raw)
         return
-    note = _STATUS_NOTE.get(ans.status)
-    if note:
-        getattr(st, note[0])(note[1])
-
-    av.methodology(ans)          # how the AI exposure scores were computed
-    av.headline(ans)
-    av.key_points(ans)
-    av.occupation_cards(ans, engine)
 
     n_cited = sum(1 for _, _, c in ans.evidence if c)
     st.markdown(
@@ -383,22 +417,28 @@ def render_answer(ans: Answer, idx: int, is_last: bool):
         f"📚 Sources ({len(ans.sources)})", f"🔎 Evidence ({len(ans.evidence)})",
         "📊 Charts"])
     with t_ans:
+        if entities:
+            st.caption(entities)
+        if ans.status == "truncated":
+            st.info("✂️ The reply hit the output-token limit and was cut off — showing "
+                    "the recovered partial answer. The list below may be incomplete.")
+        av.grounding_notice(ans)     # first: is this answer backed by O*NET records?
+        av.headline(ans)
         av.answer_body(ans)
+        av.occupation_cards(ans, engine)
         if ans.invalid_citations:
             st.caption("Citations not found in evidence: " +
                        ", ".join(map(str, ans.invalid_citations)))
-    with t_chart:
-        av.charts(ans, engine)
     with t_focus:
         html = _cached_html(ans, "focus", lambda: av.focus_graph_html(ans, engine))
         if html:
             _embed(html, 530)
+            colors = ("job colors follow the AI exposure score (green = lower, red = "
+                      "higher)" if ans.exposure_in_evidence else "jobs are red")
             st.caption("Only what this answer relies on: the records it cited, the "
                        "O*NET Related-Occupations links to each recommended job, and "
-                       "every occupation whose profile or AI-exposure score it cited. "
-                       "★ = the occupation you asked about; job colors follow the AI "
-                       "exposure score (green = lower, red = higher). Click any node "
-                       "or edge for details.")
+                       "every occupation whose profile it cited. ★ = the occupation you "
+                       f"asked about; {colors}. Click any node or edge for details.")
         else:
             st.info("The answer cited no graph records to draw.")
     with t_full:
@@ -414,13 +454,15 @@ def render_answer(ans: Answer, idx: int, is_last: bool):
         av.sources(ans)
     with t_ev:
         av.evidence_table(ans)
+    with t_chart:
+        av.charts(ans, engine)
 
-    label, color = _STATUS_BADGE.get(ans.status, (ans.status, "#6B7280"))
+    label, color = _STATUS_BADGE.get(ans.status, (ans.status, "#4B5563"))
     u = ans.usage
     mem = f" · 🧠 {ans.history_turns} prior turn(s)" if ans.history_turns else ""
     st.markdown(
         f"<span class='pill' style='background:{color}'>{label}</span> "
-        f"<span style='color:#6B7A90;font-size:.78rem'>{n_cited}/{len(ans.evidence)} "
+        f"<span style='color:#4B5563;font-size:.78rem'>{n_cited}/{len(ans.evidence)} "
         f"evidence lines cited · {ans.model or backend_desc} · context "
         f"{ans.context_tokens} tok · in {u.get('input_tokens')} / out "
         f"{u.get('output_tokens')} tok · {u.get('latency_s', 0):.1f}s{mem}</span>",
@@ -435,137 +477,11 @@ def render_answer(ans: Answer, idx: int, is_last: bool):
                 st.rerun()
 
 
-def memory_history() -> list[dict]:
-    """Turns the next question may refer to (after the last 'forget')."""
-    if not ss.use_memory:
-        return []
-    answers = [m["answer"] for m in ss.messages if m.get("answer") is not None]
-    return [a.memory_turn() for a in answers[ss.memory_from:]]
-
-
-@st.cache_data(show_spinner=False)
-def how_it_works_html() -> str:
-    """Landing-page explainer: how the O*NET graph and the RAG pipeline are
-    built. Numbers are read from the loaded graph, not hard-coded."""
-    meta = engine.graph_stats()
-    nodes = meta.get("nodes_by_label", {})
-    edges = meta.get("edges_by_type", {})
-    n_alt = sum(len(engine.G.nodes[j].get("alt_titles") or [])
-                for _, j in engine.occupations)
-    rw = meta.get("rated_weight", {"importance": 0.7, "level": 0.3})
-    steps = [
-        ("Build the knowledge graph",
-         f"The O*NET {meta.get('onet_release', '30.3')} database files (occupations, "
-         "tasks and task ratings, detailed/intermediate/generalized work activities, "
-         "skills, abilities, knowledge, work styles, related occupations, technology "
-         "skills) are turned by a deterministic ETL into one NetworkX graph: "
-         f"{meta.get('nodes_total', 0):,} nodes of {len(nodes)} types and "
-         f"{meta.get('edges_total', 0):,} edges of {len(edges)} types, covering "
-         f"{meta.get('analytic_sample', 0):,} occupations (including those whose skill "
-         "ratings O*NET has not published yet, e.g. Data Scientists). Each edge is one "
-         "O*NET record with a stable id; rating edges carry importance, level and a "
-         f"weight w = {rw['importance']}·IM/5 + {rw['level']}·LV/7. Rows O*NET marks "
-         "\"recommend suppress\" are dropped."),
-        ("Link the question to the graph",
-         f"Words in the question are matched to graph nodes: exact match over "
-         f"{len(engine.occupations):,} occupation titles and {n_alt:,} alternate titles "
-         "plus skill, task and activity names, then fuzzy matching. If no occupation "
-         "is named, the LLM proposes O*NET titles that are matched the same way; "
-         "follow-ups reuse the occupations from earlier turns (conversation memory)."),
-        ("Traverse and select evidence",
-         "From the linked seed nodes the retriever expands a typed subgraph: edges "
-         "that join two seeds, task -> activity roll-ups, and ratings ranked by w. "
-         "Question intent adds O*NET Related Occupations (career change), occupation "
-         "profiles, transferable skills and AI exposure scores. Each record becomes "
-         "one numbered evidence line ([E...] record, [N-...] profile, [X-...] AI "
-         "exposure) until the token budget is used."),
-        ("Generate and verify",
-         "An LLM (via OpenRouter) answers only from those evidence lines, as "
-         "structured JSON with citations. Every cited id is checked against the "
-         "evidence it was shown; occupation cards, Job Zones and AI exposure scores "
-         "are rebuilt from the graph and the index, never taken from the model, and "
-         "the answer is labelled grounded, partially grounded or ungrounded."),
-    ]
-    cards = "".join(
-        f"<div class='step'><span class='n'>{i}</span><span class='t'>{_html.escape(t)}</span>"
-        f"<div class='d'>{_html.escape(d)}</div></div>"
-        for i, (t, d) in enumerate(steps, 1))
-    schema = ("Job -HAS_TASK-> Task -MAPS_TO-> DWA -PART_OF-> IWA -PART_OF-> GWA\n"
-              "Job -RATED{importance, level}-> Skill | Ability | Knowledge | Work style | GWA\n"
-              "Skill | Ability | Work style -ENABLES-> GWA      Job -RELATED_TO{rank}-> Job\n"
-              "Job -USES_TECH-> Technology      + AI Exposure Index joined on the SOC code")
-    top_nodes = ", ".join(f"{k} {v:,}" for k, v in list(nodes.items())[:6])
-    top_edges = ", ".join(f"{k} {v:,}" for k, v in list(edges.items())[:5])
-    return f"""
-<div class="how">
-  <div class="h">How this Graph RAG is built</div>
-  <div class="sub">Graph RAG = retrieval-augmented generation over a knowledge graph.
-    Instead of searching text chunks, the chatbot walks the O*NET occupational graph,
-    hands the model only the database records it found, and checks every citation.</div>
-  <div class="steps">{cards}</div>
-  <div class="schema">{_html.escape(schema)}</div>
-  <div class="src">Largest node types: {_html.escape(top_nodes)}. Largest edge types:
-    {_html.escape(top_edges)}. Data: O*NET 30.3 Database, U.S. Department of Labor/ETA
-    (CC BY 4.0); AI exposure: {_html.escape(ai_exposure.SOURCE_CITATION)}.</div>
-</div>"""
-
-
-# -------------------------------------------------------------------- chat
-if not ss.messages:
-    st.markdown(how_it_works_html(), unsafe_allow_html=True)
-else:
-    with st.expander("ℹ️ How this Graph RAG is built"):
-        st.markdown(how_it_works_html(), unsafe_allow_html=True)
-n_assist = sum(1 for m in ss.messages if m.get("answer") is not None)
-seen_assist = 0
-for i, msg in enumerate(ss.messages):
-    with st.chat_message(msg["role"]):
-        if msg["role"] == "assistant" and msg.get("answer") is not None:
-            seen_assist += 1
-            if msg.get("entities"):
-                st.caption(msg["entities"])
-            render_answer(msg["answer"], i, is_last=seen_assist == n_assist)
-        else:
-            st.markdown(msg["content"])
-
-if not ss.messages:
-    st.markdown("<div class='sec-title'>Try asking</div>", unsafe_allow_html=True)
-    examples = [
-        "I was a telemarketer and lost my job to AI. What other jobs fit my skills?",
-        "What does a Registered Nurse do, and how exposed is it to AI?",
-        "Compare Software Developers and Data Scientists.",
-        "I'm an accountant and worried about AI. Which jobs could I switch to?",
-    ]
-    cols = st.columns(2)
-    for j, ex in enumerate(examples):
-        if cols[j % 2].button(ex, key=f"ex-{j}", width="stretch"):
-            ss.pending_question = ex
-            st.rerun()
-
-typed = st.chat_input("Ask about occupations, tasks, skills, AI exposure... "
-                      "(follow-ups remember the conversation)")
-question = typed or ss.pop("pending_question", None)
-if question:
-    ss.messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
-
+def run_question(question: str, forced_seeds: list[str] | None, note: str | None = None):
+    """Retrieve + generate inside an assistant bubble, then store the answer."""
     with st.chat_message("assistant"):
-        history = memory_history()
-        res = engine.resolve_seeds(question, auto_match=auto_link)
-        entity_caption = res.caption()
-        if entity_caption:
-            st.caption(entity_caption)
-        elif history:
-            st.caption("🧠 No occupation named — reading the question with the "
-                       "conversation so far.")
-        elif auto_link:
-            st.caption("No occupation named explicitly — asking the model which "
-                       "occupation(s) you mean, then searching O*NET for them.")
-        else:
-            st.warning("No graph entities matched — the model will be told "
-                       "there is no evidence. Name the occupation explicitly "
-                       "(e.g. 'Registered Nurses').")
+        if note:
+            st.caption(note)
         ans = None
         if not configured:
             st.error("Enter your OpenRouter API key in the sidebar and click "
@@ -573,19 +489,151 @@ if question:
         else:
             with st.spinner("Retrieving evidence + generating..."):
                 try:
-                    ans = engine.ask(question,
+                    ans = engine.ask(question, forced_seeds=forced_seeds,
                                      api_key=ss.or_key, model=ss.or_model,
                                      budget=budget, auto_link=auto_link,
-                                     history=history)
-                    entity_caption = ans.entity_caption or entity_caption
+                                     history=memory_history())
                 except Exception as e:  # bad key / network errors surface here
                     st.error(f"Generation failed: {e}")
         if ans is not None:
-            ss.messages.append(
-                {"role": "assistant", "content": "", "answer": ans,
-                 "entities": entity_caption})
-            # re-render from history so the header buttons include it
+            ss.messages.append({"role": "assistant", "content": "", "answer": ans,
+                                "entities": ans.entity_caption})
             st.rerun()
+        st.stop()      # generation failed: keep the transcript as it is
+
+
+def confirmation_card(pending: dict) -> None:
+    """Ask which O*NET occupation(s) the question is about before answering."""
+    terms = pending["terms"]
+    names = " / ".join(f"<b>{_html.escape(t['term'])}</b>" for t in terms)
+    with st.chat_message("assistant"):
+        st.markdown(
+            f"<div class='confirm'><div class='lbl'>Please confirm the occupation</div>"
+            f"<div class='q'>O*NET has no occupation called {names} exactly.</div>"
+            f"<div class='d'>These are the closest O*NET occupations. Tick the "
+            f"ones to proceed with, pick another from the full list, or type a different "
+            f"occupation name in the chat box.</div></div>",
+            unsafe_allow_html=True)
+        picked: list[str] = []
+        label_of: dict[str, str] = {}
+        for t in terms:
+            opts = [soc for soc, _ in t["candidates"]]
+            label_of.update({soc: f"{title} ({soc})" for soc, title in t["candidates"]})
+            via = ("from your wording" if t["via"] == "wording"
+                   else "as the model read your message")
+            picked += st.pills(f"Closest to “{t['term']}” ({via})", opts,
+                               format_func=lambda s: label_of[s], selection_mode="multi",
+                               default=opts[:1], key=f"confirm-{pending['question']}-{t['term']}")
+        extra = st.selectbox("Or choose any other O*NET occupation", [None] + engine.occupations,
+                             format_func=lambda t: "— type to search —" if t is None else
+                             f"{t[0]} ({t[1]})", key=f"confirm-other-{pending['question']}")
+        if extra:
+            picked.append(extra[1])
+        picked = list(dict.fromkeys(picked))
+        c1, c2 = st.columns([1, 1])
+        go = c1.button(f"✅ Proceed with {len(picked)} occupation(s)" if picked else
+                       "✅ Proceed", type="primary", disabled=not picked, width="stretch")
+        skip = c2.button("Answer without choosing", width="stretch",
+                         help="The model is told the evidence may not match your wording.")
+        if go or skip:
+            ss.pending_confirm = None
+            chosen = picked if go else []
+            if chosen:
+                titles = ", ".join(engine.G.nodes[s].get("name", s) for s in chosen)
+                note = f"📌 Confirmed: {titles}"
+            else:
+                note = "No occupation confirmed — answering from the closest matches."
+            run_question(pending["question"], chosen or None, note)
+
+
+# -------------------------------------------------------------------- chat
+_answers = _all_answers()
+chat_col, info_col = st.columns([2.05, 1], gap="large")
+
+
+# ------------------------------------------- info bar (right): explainers
+def latest_ai_answer() -> Answer | None:
+    for a in reversed(_answers):
+        if getattr(a, "ai_relevant", False) and a.exposure_method:
+            return a
+    return None
+
+
+with info_col, st.container(key="infobar"):
+    st.markdown("<div class='infobar-title'>ℹ️ About this chatbot</div>"
+                "<div class='infobar-sub'>Click a question to open it. These panels are "
+                "reference material and stay out of the chat.</div>",
+                unsafe_allow_html=True)
+    with st.expander("How is this Graph RAG built?", icon="💡"):
+        st.markdown(how_it_works_html(), unsafe_allow_html=True)
+    with st.expander(av.METHOD_PROMPT, icon="🤖"):
+        av.exposure_panel(latest_ai_answer())
+
+# ------------------------------------------------------- chat (left column)
+with chat_col:
+    if not ss.messages:
+        st.markdown(
+            "<div class='landing'><div class='g'>What would you like to know about an "
+            "occupation?</div>"
+            "<div class='d'>This is an <b>evidence-based chatbot</b>. It does not answer "
+            "from memory: it looks things up in the <b>O*NET knowledge graph</b> — the "
+            "U.S. Department of Labor's map of over 900 occupations and their tasks, "
+            "skills and links — and answers only from the records it finds there "
+            "(<b>Graph RAG</b>). Every answer cites those records, and you can open "
+            "them under the answer.</div>"
+            "<div class='d2'>Ask about tasks, skills, related jobs or <b>AI exposure</b>."
+            "</div></div>",
+            unsafe_allow_html=True)
+        examples = [
+            "I was a telemarketer and lost my job to AI. What other jobs fit my skills?",
+            "What does a Registered Nurse do?",
+            "Compare Software Developers and Data Scientists.",
+            "I'm an accountant and worried about AI. Which jobs could I switch to?",
+        ]
+        cols = st.columns(2)
+        for j, ex in enumerate(examples):
+            if cols[j % 2].button(ex, key=f"ex-{j}", width="stretch"):
+                ss.pending_question = ex
+                st.rerun()
+
+    n_assist = len(_answers)
+    seen_assist = 0
+    for i, msg in enumerate(ss.messages):
+        with st.chat_message(msg["role"]):
+            if msg["role"] == "assistant" and msg.get("answer") is not None:
+                seen_assist += 1
+                render_answer(msg["answer"], i, is_last=seen_assist == n_assist,
+                              entities=msg.get("entities"))
+            else:
+                st.markdown(msg["content"])
+
+    if ss.pending_confirm:
+        confirmation_card(ss.pending_confirm)
+
+# the chat box stays at top level so Streamlit pins it to the bottom
+typed = st.chat_input("Ask about occupations, tasks, skills, AI exposure... "
+                      "(follow-ups remember the conversation)")
+question = typed or ss.pop("pending_question", None)
+if question:
+    pending, ss.pending_confirm = ss.pending_confirm, None
+    # while a confirmation is open, a short reply that names an occupation
+    # answers it ("business professor"); anything else is a new question
+    hits = engine.search_occupations(question, 1) if pending else []
+    with chat_col:
+        ss.messages.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.markdown(question)
+        if hits and hits[0]["score"] >= 90 and len(question.split()) <= 6:
+            run_question(pending["question"], [hits[0]["soc"]],
+                         f"📌 Confirmed: {hits[0]['title']}")
+        else:
+            proposal = engine.propose_occupations(
+                question, history=memory_history(), auto_match=auto_link,
+                api_key=ss.or_key or None, model=ss.or_model)
+            if proposal["confirm"]:
+                ss.pending_confirm = {"question": question, "terms": proposal["terms"]}
+                st.rerun()
+            run_question(question, None)
 
 # ------------------------------------------------------------------ footer
 st.divider()
@@ -594,7 +642,7 @@ st.markdown(
     "U.S. Department of Labor / ETA, used under CC BY 4.0 — O*NET® is a "
     "trademark of USDOL/ETA. This tool has not been reviewed or endorsed by "
     "USDOL/ETA. · AI exposure: " + ai_exposure.SOURCE_CITATION + " (third-party "
-    "index, not part of O*NET; methodology: " + ai_exposure.METHOD_URL + "). · Retrieval: graph-traversal RAG with "
-    "deterministic, record-level citations. · REST API: "
-    "<code>uvicorn api:app</code>.</div>",
+    "index, not part of O*NET; methodology: " + ai_exposure.METHOD_URL + "). · "
+    "Retrieval: graph-traversal RAG with deterministic, record-level citations. · "
+    "REST API: <code>uvicorn api:app</code>.</div>",
     unsafe_allow_html=True)

@@ -5,6 +5,8 @@ import json
 
 import pytest
 
+import bootstrap
+
 from engine import ChatEngine, NotConfiguredError, _MissingKeyLLM
 from tests.conftest import FakeLLM
 
@@ -264,7 +266,7 @@ def test_per_request_model_does_not_mutate_default(engine, fake_llm, monkeypatch
 
 def test_budget_is_clamped(engine):
     assert engine._clamp_budget(1) == 500
-    assert engine._clamp_budget(10**6) == 8000
+    assert engine._clamp_budget(10**6) == bootstrap.MAX_CONTEXT_BUDGET == 32000
     assert engine._clamp_budget(None) == 3000
 
 

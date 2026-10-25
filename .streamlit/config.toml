@@ -1,0 +1,21 @@
+# App theme: high-contrast text on a clean light background (ChatGPT-like).
+[theme]
+base = "light"
+primaryColor = "#2563EB"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F3F4F6"
+textColor = "#111827"
+linkColor = "#1D4ED8"
+borderColor = "#D1D5DB"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+baseRadius = "10px"
+baseFontSize = 17          # slightly larger type (Streamlit default 16)
+showSidebarBorder = true
+
+[theme.sidebar]
+backgroundColor = "#F9FAFB"
+secondaryBackgroundColor = "#EEF2F7"
+textColor = "#111827"
+
+[client]
+toolbarMode = "minimal"

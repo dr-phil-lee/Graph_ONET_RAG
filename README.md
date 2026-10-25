@@ -7,10 +7,22 @@ graph-RAG system from the ONET-MHQA benchmark study.
 
 What an answer looks like (the app and every answer are in English):
 
-- **AI exposure methodology first**: whenever an occupation in focus has an
-  AI exposure score, the answer opens with how the score is calculated (the
-  source index, the nine O*NET 31.0 ratings it uses, the formula, each
-  occupation's own calculation) and the references, before the headline.
+- **Confirmed occupations**: when the question names no occupation that
+  exists in O*NET under that title ("professor", "receptionist", "I sell
+  things over the phone"), the chat shows the closest O*NET occupations and
+  asks which to proceed with - or lets you pick any other - before anything
+  is generated. Exact titles and alternate titles ("RN", "high school
+  teacher") go straight through.
+- **AI exposure only when it is asked for**: AI exposure scores enter the
+  evidence for questions about AI / automation and for career-change
+  questions. For a question about AI the answer ends with what the score
+  means (how exposed an occupation's work is to AI-driven task automation),
+  how it is calculated (the source index, the nine O*NET 31.0 ratings, the
+  formula, each occupation's own calculation) and the references. A plain
+  "what does X do" or skill question is answered without scores.
+- **Honest about gaps**: when the retrieved records do not cover what was
+  asked, the answer says so first and lists no occupations without a cited
+  record; an ungrounded reply is flagged as the model's own text.
 - **Structured**: a one-sentence headline, up to five cited key points,
   occupation cards (Job Zone, O*NET relatedness rank, top transferable
   skills, AI exposure, the model's one-line "why it fits", sources), the full
@@ -76,7 +88,7 @@ sidebar, or send it per request to the API. Keys are never written anywhere.
 Tests:
 
 ```bash
-python -m pytest -q        # 108 offline tests, fake LLM, no key needed (~2 min)
+python -m pytest -q        # 119 offline tests, fake LLM, no key needed (~2 min)
 python test_chat.py        # live smoke test against OpenRouter (needs a key)
 ```
 
@@ -257,7 +269,7 @@ Request body:
   "occupations": ["29-1141.00"],      // optional: pin O*NET-SOC codes as seeds
   "auto_link": true,                  // fuzzy-match occupations from wording
   "model": "anthropic/claude-haiku-4.5",
-  "budget": 3000,                     // evidence tokens, 500-8000
+  "budget": 3000,                     // evidence tokens, 500-32000
   "include_evidence": true,           // every evidence line shown to the model
   "include_graph": false,             // evidence subgraph {nodes, edges}
   "include_focus_graph": true,        // answer-focused subgraph, jobs carry ai_exposure
@@ -271,13 +283,6 @@ Structured fields in the response (besides the ones shown below):
 
 ```json
 {
-  "ai_exposure_method": {"summary": "Each occupation's AI exposure score comes from nine O*NET 31.0 ...",
-                         "formula": "AI exposure = (Digital - Human contact - Physical + 2) / 3",
-                         "steps": ["..."], "variables": [{"variable": "Working with Computers",
-                         "onet_element": "4.A.3.b.1", "dimension": "Digital", "...": "..."}],
-                         "limitations": ["..."], "join": "...",
-                         "references": [{"label": "Methodology", "citation": "Rowe, B. (2026) ...",
-                                         "url": "https://opportunitydata.org/ai-exposure-methodology.html"}]},
   "headline": "Customer Service Representatives is the closest related job [E199296].",
   "key_points": ["Telemarketers: AI exposure 0.63 [X-41-9041.00]", "..."],
   "occupations": [{"soc": "43-4051.00", "title": "Customer Service Representatives",
@@ -395,27 +400,49 @@ const {answer, citations, status, evidence} = await r.json();
 
 ## Chat UI features
 
-- **Landing page** — "How this Graph RAG is built": the four pipeline steps
-  (build the O*NET graph, link the question, traverse and select evidence,
-  generate and verify), the graph schema, and node/edge counts read from the
-  loaded graph. Once a chat starts it stays available as an expander.
-- **Chat** — ask about occupations, tasks, skills, activities and AI
-  exposure. Each answer shows a headline banner, numbered key points with
-  citation chips, a card for your occupation and one per recommended
-  occupation (Job Zone blocks, relatedness rank, AI-exposure gauge with the
-  difference to your current job, top skills, sources), then six clickable
-  views, drawn as pill buttons under a "click each tab" hint:
-  📝 Answer · 🎯 Focus graph · 🕸️ Evidence graph · 📚 Sources · 🔎 Evidence ·
-  📊 Charts. "Ask next" buttons send a suggested follow-up.
+- **Landing page** — a plain chat start: the greeting, a two-sentence
+  plain-language introduction (an evidence-based chatbot that looks things
+  up in the O*NET knowledge graph and answers only from the records it
+  finds - Graph RAG) and four example questions.
+- **Info bar** (right column, apart from the chat) — two collapsed panels
+  that open on click: "How is this Graph RAG built?" (four plain-language
+  steps - O*NET becomes a map -> your question is placed on it -> the facts
+  around it are collected -> the AI writes from those facts and is checked -
+  with counts read from the loaded graph) and "Where does the AI exposure
+  score come from?" (what the score means, the source index, the formula,
+  the nine O*NET variables and references; when the
+  latest answer was about AI, its occupations' own calculations are listed).
+- **Occupation confirmation** — if the question names no occupation that
+  exists in O*NET under that exact title, the assistant replies with the
+  closest O*NET occupations (from the wording, or from the model's reading of
+  the message when the wording names none), pre-selects the best one and
+  waits: tick the ones to proceed with, pick any other occupation from the
+  searchable list, type an occupation name in the chat box, or "Answer
+  without choosing". Exact titles, alternate titles, skill/task questions and
+  follow-ups ("which of those...") need no confirmation.
+- **Chat** — each answer opens directly on six clickable views drawn as
+  pill buttons under a "click each tab" hint (📝 Answer · 🎯 Focus graph ·
+  🕸️ Evidence graph · 📚 Sources · 🔎 Evidence · 📊 Charts). The Answer view
+  holds the whole response: a grounding notice (only when the evidence did
+  not cover the question or the model listed occupations without citing a
+  record for them), the headline banner, the answer text with citation
+  chips, then a card for your occupation and one per recommended occupation
+  (Job Zone blocks, an AI exposure bar graph on a 0-1 track, top skills,
+  sources, and - for AI / career questions - the difference to your
+  current job's score). For questions about AI only, a collapsed "Do you want to
+  know about AI exposure score?" panel below the views explains what the
+  score means, how it is calculated, each occupation's calculation and the
+  references. "Ask next" buttons send a suggested follow-up.
+- **Evidence budget** (sidebar) — slider from 1,000 to 10,000 tokens, or
+  switch on "Custom amount" and type any value up to 32,000.
 - **Conversation memory** (sidebar) — on by default; shows the occupations
   in focus, and "Forget memory" starts fresh without clearing the transcript.
-- **Entity matching** — exact links and `≈` auto-matches; if a match is
-  wrong, name the occupation exactly (the REST API can still pin O*NET-SOC
-  codes).
-- **Export** (header) — the whole conversation as JSON with every structured
-  field.
-- **PDF report** (header button) — every answer in the session with
-  evidence figures, tables, and verified citations.
+- **Report and Clear chat** (top-right buttons) — the report saves the
+  whole session as one PDF: headline, occupations, the full answer,
+  sources, the evidence subgraph and table (✓ = cited) and, for AI
+  questions, the score methodology last. Clear chat starts a fresh session.
+- **Settings panel** — collapsing the sidebar leaves a labelled
+  "Open settings panel" button in the top-left corner.
 - **Model choice** (sidebar) — any model in the OpenRouter catalog; the key
   and model are kept per browser session.
 
@@ -442,7 +469,7 @@ memory.py           conversation turns + ConversationStore (API sessions)
 answer_view.py      structured answer rendering: banner, cards, Altair charts, graphs
 openrouter_llm.py   OpenRouter backend with retry / error policy
 graph_view.py       pyvis evidence subgraph + ego network
-report.py           PDF report
+report.py           PDF report (build_pdf, the header download) + Markdown report (build_markdown)
 bootstrap.py        paths, .env, defaults
 src/onetrag/        frozen research package (never edit; tests assert it matches Research/src)
 data/graph/         nodes.parquet, edges.parquet, meta.json

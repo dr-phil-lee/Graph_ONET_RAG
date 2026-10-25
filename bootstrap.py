@@ -46,11 +46,12 @@ OPENROUTER_APP_TITLE = "O*NET Graph RAG"
 # must never be edited (its hash keys the research LLM cache).
 DEFAULT_CONTEXT_BUDGET = 3000
 MIN_CONTEXT_BUDGET = 500
-MAX_CONTEXT_BUDGET = 8000
+MAX_CONTEXT_BUDGET = 32000          # hard ceiling (UI slider stops at
+BUDGET_SLIDER_MAX = 10000           # BUDGET_SLIDER_MAX; "custom" goes beyond)
 # Generous output ceiling: advisory answers (career change, comparisons) with
 # inline citations were getting cut mid-JSON at 2000 tokens. The prompt also
 # caps answer length, and a cut reply is repaired and flagged "truncated".
-GEN_MAX_TOKENS = 4000
+GEN_MAX_TOKENS = 8000
 GEN_TEMPERATURE = 0.2
 LLM_TIMEOUT_S = 120
 

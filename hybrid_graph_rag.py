@@ -46,9 +46,9 @@ Rules:
 2. Copy occupation, task, skill, and activity names and all numbers (importance, level, Job Zone, relatedness rank, AI exposure score) exactly as written in the evidence. Never round, estimate, or invent values.
 3. For list questions "answer" is an array of names, ordered as the evidence supports it (e.g. by importance, highest first). For numeric questions it is the number. For yes/no questions it is true or false. For open or advisory questions (career change, "what does X do", comparisons, recommendations) it is a well-organised markdown string.
 4. For career-change, "similar job", "what else could I do" or recommendation questions: the "is related to the occupation" records are O*NET's official Related Occupations, and the occupation profiles and ratings describe them - that IS sufficient evidence. Recommend from those records, ordered by relatedness rank, and explain each using its profile (description, Job Zone) and the shared skills, abilities or activities in the evidence. Fill "occupations" with them.
-5. AI exposure: when [X-...] lines are present, report the composite AI exposure score (a number from 0 to 1, exactly as written) of the occupations you discuss and cite those lines; for career changes, point out which related occupations have a lower score than the current one and by how much. Give scores only: never use or invent category labels for them (no "tier", "moderate", "highly exposed", "AI-protected" or similar). Do not explain how the index is computed - the app shows its methodology above your answer. If an occupation has no [X-...] line, say its AI exposure is not covered - never guess it.
+5. AI exposure: when [X-...] lines are present, report the composite AI exposure score (a number from 0 to 1, exactly as written) of the occupations you discuss and cite those lines; for career changes, point out which related occupations have a lower score than the current one and by how much. Give scores only: never use or invent category labels for them (no "tier", "moderate", "highly exposed", "AI-protected" or similar). Do not explain how the index is computed - the app explains the score below your answer. If an occupation has no [X-...] line, say its AI exposure is not covered - never guess it. When there are no [X-...] lines at all, do not bring up AI exposure.
 6. For questions comparing two occupations, cite evidence for BOTH occupations.
-7. If the evidence answers only part of the question, answer that part fully and add one sentence saying what the evidence does not cover. Only when NO evidence line is relevant to the question, start "headline" and "answer" with "Insufficient evidence:" and set "citations" to [].
+7. If the evidence answers only part of the question, answer that part fully and add one sentence saying what the evidence does not cover. If the evidence does not cover the occupation or topic the user actually asked about (for example the user asks about receptionists but every line is about other occupations), say so in the FIRST sentence of "headline" and "answer" ("The evidence does not cover ..."), leave "occupations" empty, and do not recommend or list occupations as if they answered the question - never fill the gap with your own knowledge. Only when NO evidence line is relevant to the question, start "headline" and "answer" with "Insufficient evidence:" and set "citations" to [].
 8. Cite only ids that appear in the evidence. Never fabricate ids. The conversation history (if given) is NOT evidence: use it only to understand what the user refers to ("those jobs", "the second one") and never cite it.
 9. Write every text field (headline, key_points, fit, answer, follow_ups, reasoning) in English only, whatever language the question is written in.
 10. Be concise so the reply is never cut off: "answer" under about 300 words and do not repeat every key point in it; at most 6 occupations. The JSON must be complete and valid."""
@@ -82,6 +82,20 @@ HISTORY_CHARS = 500
 
 def _has(ql: str, rx: re.Pattern) -> bool:
     return bool(rx.search(ql))
+
+
+def ai_question(question: str) -> bool:
+    """The question itself is about AI / automation / exposure."""
+    return _has((question or "").lower(), _AI)
+
+
+def exposure_relevant(question: str) -> bool:
+    """AI exposure lines belong in the evidence: the question is about AI,
+    or it is a career-change question (the index is what the user weighs
+    the options with). A plain "what does X do" / skill question gets none,
+    so the answer is not sidetracked by scores nobody asked for."""
+    ql = (question or "").lower()
+    return _has(ql, _AI) or _has(ql, _CAREER_CHANGE)
 
 
 class HybridGraphRAG(GraphRAG):
@@ -119,6 +133,8 @@ class HybridGraphRAG(GraphRAG):
                     seen.add(u["unit_id"])
                     merged.append(u)
             units = merged
+        if not exposure_relevant(question):
+            return units
         return self._with_exposure(units)
 
     def _with_exposure(self, units: list[dict]) -> list[dict]:

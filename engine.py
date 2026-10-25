@@ -38,7 +38,7 @@ from onetrag.onet_io import OnetData
 import ai_exposure
 import graph_ext
 import memory
-from hybrid_graph_rag import HISTORY_TURNS, HybridGraphRAG
+from hybrid_graph_rag import HISTORY_TURNS, HybridGraphRAG, ai_question
 from openrouter_llm import OpenRouterLLM
 
 
@@ -131,6 +131,9 @@ class Answer:
     # conversation memory
     standalone_question: str | None = None   # follow-up rewritten with the history
     history_turns: int = 0                    # prior turns the answer could see
+    # the question is about AI (or the answer cited an AI exposure line): only
+    # then does the UI explain the score and its methodology
+    ai_relevant: bool = False
     rec: dict = field(repr=False, default_factory=dict)
 
     @property
@@ -149,19 +152,29 @@ class Answer:
         return memory.turn_from_answer(self)
 
     @property
+    def exposure_in_evidence(self) -> bool:
+        """AI exposure lines were retrieved for this question (AI or
+        career-change questions only)."""
+        return any(uid.startswith("X-") for uid, _, _ in self.evidence)
+
+    @property
     def exposure_method(self) -> dict | None:
-        """How the AI exposure scores in this answer were computed (shown
-        before the answer); None when no occupation in focus has a score."""
+        """What the AI exposure score means and how it was computed (shown
+        after the answer); None when no occupation in focus has a score."""
         if not any(r.get("exposure") for r in self.ai_exposure):
             return None
         return ai_exposure.methodology()
+
+    @property
+    def unsupported_occupations(self) -> list[str]:
+        """Titles of listed occupations the model cited no evidence for."""
+        return [c["title"] for c in self.occupations if not c.get("citations")]
 
     def to_dict(self, include_evidence: bool = True) -> dict:
         p = self.parsed or {}
         d = {
             "question": self.question,
             "standalone_question": self.standalone_question,
-            "ai_exposure_method": self.exposure_method,
             "headline": self.headline,
             "key_points": list(self.key_points),
             "answer": p.get("answer"),
@@ -186,6 +199,9 @@ class Answer:
             "context_tokens": self.context_tokens,
             "usage": dict(self.usage),
             "raw": self.raw if self.parsed is None else None,
+            # last: only meaningful when the question was about AI
+            "ai_relevant": self.ai_relevant,
+            "ai_exposure_method": self.exposure_method if self.ai_relevant else None,
         }
         if include_evidence:
             d["evidence"] = [{"id": uid, "statement": _strip_tag(uid, text), "cited": cited}
@@ -472,6 +488,66 @@ class ChatEngine:
         # re-finds itself (HybridGraphRAG.seeds_for unions both).
         seeds = [e.node_id for e in entities if e.source != "linked"]
         return SeedResolution(entities=entities, seeds=seeds, suggestions=suggestions)
+
+    def propose_occupations(self, question: str, *, history: list[dict] | None = None,
+                            api_key: str | None = None, model: str | None = None,
+                            auto_match: bool = True) -> dict:
+        """The confirmation step before a question is answered.
+
+        Returns {"confirm": bool, "terms": [{"term", "candidates": [(soc, title)],
+        "via"}], "entities": [Entity]}. confirm is True when the question
+        names no occupation that exists in O*NET under that exact title (or
+        alternate title), yet close occupations were found - from the wording
+        ("professor" -> the Postsecondary Teachers) or, when the wording
+        names none, from the model's reading of the message ("I sell things
+        over the phone" -> Telemarketers). The UI then asks the user which of
+        the candidates to proceed with instead of guessing. No confirmation
+        for questions that name an occupation exactly, name none (skill or
+        task questions), or point back into the conversation ("those jobs").
+        """
+        res = self.resolve_seeds(question, auto_match=auto_match)
+        out = {"confirm": False, "terms": [], "entities": res.entities}
+        if any(e.label == "Job" and e.confidence == "high" for e in res.entities):
+            return out
+        history = memory.normalize_turns(history)
+        if history and _REFERENTIAL.search(question.lower()):
+            return out                                  # a follow-up: memory resolves it
+        # exact links stay out of the candidate list (they are already in);
+        # the low-confidence guess is offered as a candidate like any other
+        linked = {e.node_id for e in res.entities if e.confidence == "high"}
+        terms: list[dict] = []
+        if res.suggestions:
+            detailed = self.suggest_occupations_detailed(question)
+            for term, info in detailed.items():
+                cands = [(s, t) for s, t in info["candidates"] if s not in linked][:6]
+                if cands:
+                    terms.append({"term": term, "candidates": cands, "via": "wording"})
+        elif api_key or not isinstance(self.default_llm, _MissingKeyLLM):
+            llm = (OpenRouterLLM(api_key, model or self.default_model) if api_key
+                   else self.default_llm)
+            for name in self._llm_occupation_names(question, llm):
+                hits = self.search_occupations(name, 4)
+                cands = [(h["soc"], h["title"]) for h in hits if h["soc"] not in linked]
+                if cands:
+                    terms.append({"term": name, "candidates": cands, "via": "model"})
+        seen: set[str] = set()
+        for t in terms:                                 # one card per occupation
+            t["candidates"] = [(s, n) for s, n in t["candidates"]
+                               if not (s in seen or seen.add(s))]
+        terms = [t for t in terms if t["candidates"]][:3]
+        out.update(confirm=bool(terms), terms=terms)
+        return out
+
+    def _llm_occupation_names(self, question: str, llm) -> list[str]:
+        """Occupation titles the model reads in the message (best effort)."""
+        try:
+            resp = llm.complete(model=self.cfg["models"]["generator"],
+                                system=LINK_SYSTEM_PROMPT, user=question, max_tokens=200)
+            obj = self._parse_json(resp.get("text", "")) or {}
+            names = obj.get("occupations") or []
+        except Exception:  # noqa: BLE001 - linking help is best-effort
+            return []
+        return [n.strip() for n in names[:4] if isinstance(n, str) and n.strip()]
 
     def _weak_link(self, nid: str, label: str, question: str) -> bool:
         """True when a Job was linked only through a single-word alternate
@@ -844,6 +920,12 @@ class ChatEngine:
         rag = self._make_rag(llm, self._clamp_budget(budget) if budget else self.budget)
 
         res = self.resolve_seeds(question, pinned=forced_seeds or (), auto_match=auto_link)
+        if forced_seeds:
+            # the caller (or the user, through the confirmation step) named
+            # the occupations: single-word alternate-title guesses are dropped
+            res.entities = [e for e in res.entities
+                            if not (e.source == "matched" and e.confidence == "low")]
+            res.seeds = [e.node_id for e in res.entities if e.source != "linked"]
         history = memory.normalize_turns(history)[-HISTORY_TURNS:]
         standalone = None
         contextual: list[Entity] = []
@@ -908,6 +990,8 @@ class ChatEngine:
             status = "ungrounded"
 
         sources = [self.source_record(uid, texts.get(uid, "")) for uid in citations]
+        ai_relevant = (ai_question(standalone or question)
+                       or any(c.startswith("X-") for c in citations))
         seed_jobs = [n for n in seeds if self.G.nodes[n].get("label") == "Job"]
         cards = self._build_cards(parsed, unit_ids, rec, seed_jobs, cited_units)
         exposure = self._exposure_rows(seed_jobs, cards)
@@ -927,7 +1011,7 @@ class ChatEngine:
                       ai_exposure=exposure,
                       focus_edge_ids=focus_edges, focus_node_ids=focus_nodes,
                       standalone_question=standalone, history_turns=len(history),
-                      rec=rec)
+                      ai_relevant=ai_relevant, rec=rec)
 
     # ------------------------------------------------- structured answer
     @staticmethod

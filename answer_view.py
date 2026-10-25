@@ -1,10 +1,12 @@
 """Structured, graphical rendering of one chatbot Answer (Streamlit).
 
 Layout of an answer:
-  AI-exposure methodology (how the scores were computed, with references)
+  grounding notice (only when the evidence did not cover the question)
   -> headline banner -> key points -> occupation cards (Job Zone, O*NET
   relatedness rank, AI-exposure gauge, top transferable skills, citations)
-  -> tabs: Answer · Charts · Focus graph · Evidence graph · Sources · Evidence
+  -> tabs: Answer · Focus graph · Evidence graph · Sources · Evidence · Charts
+  -> what the AI exposure score means and how it was computed (only when
+     the question was about AI)
 Everything except the model's own wording (headline, key points, "fit",
 answer) is read from the graph or the AI Exposure Index, never from the
 model. Model text is HTML-escaped before it is placed in HTML.
@@ -30,53 +32,52 @@ CSS = """
   text-transform: uppercase; color: #2563EB;}
 .ans-headline .txt {font-size: 1.12rem; font-weight: 650; line-height: 1.45;
   color: inherit; margin-top: .15rem;}
-.ans-interp {font-size: .8rem; color: #6B7A90; margin: -.35rem 0 .6rem .2rem;}
+.ans-interp {font-size: .8rem; color: #4B5563; margin: -.35rem 0 .6rem .2rem;}
 .cite {display:inline-block; font: 600 .68rem/1.4 ui-monospace, Consolas, monospace;
   color:#1D4ED8; background: rgba(37,99,235,.09); border: 1px solid rgba(37,99,235,.25);
   border-radius: 6px; padding: 0 .35rem; margin: 0 .1rem; vertical-align: 1px;}
 .cite.x {color:#9A3412; background: rgba(234,88,12,.08); border-color: rgba(234,88,12,.3);}
-.kp {display:flex; gap:.55rem; align-items:flex-start; padding:.42rem .2rem;
-  border-bottom: 1px dashed rgba(120,130,150,.25); font-size:.93rem; line-height:1.5;}
-.kp .n {flex:0 0 1.45rem; height:1.45rem; border-radius:50%; background:#2563EB;
-  color:#fff; font-size:.72rem; font-weight:700; display:flex; align-items:center;
-  justify-content:center; margin-top:.1rem;}
 .occ-card {border: 1px solid rgba(120,130,150,.28); border-radius: 14px;
   padding: .8rem .9rem .7rem; height: 100%; background: rgba(255,255,255,.02);
   box-shadow: 0 2px 10px rgba(15,23,42,.05); margin-bottom: .6rem;}
 .occ-card .top {display:flex; justify-content:space-between; align-items:center; gap:.4rem;}
 .occ-card .rank {font-size:.68rem; font-weight:700; color:#fff; background:#334155;
   border-radius:999px; padding:.08rem .5rem; white-space:nowrap;}
-.occ-card .soc {font: .7rem ui-monospace, Consolas, monospace; color:#6B7A90;}
+.occ-card .soc {font: .7rem ui-monospace, Consolas, monospace; color:#4B5563;}
 .occ-card .ttl {font-weight:750; font-size:1.0rem; line-height:1.3; margin:.35rem 0 .2rem;}
-.occ-card .desc {font-size:.78rem; color:#6B7A90; line-height:1.4; margin-bottom:.45rem;}
+.occ-card .desc {font-size:.8rem; color:#374151; line-height:1.45; margin-bottom:.45rem;}
+.occ-card .nocite {font-size:.68rem; font-weight:700; color:#92400E; background:#FEF3C7;
+  border:1px solid #F59E0B; border-radius:999px; padding:.08rem .5rem; white-space:nowrap;}
 .occ-card .fit {font-size:.86rem; line-height:1.45; margin:.35rem 0 .45rem;}
-.occ-card .row {display:flex; align-items:center; gap:.45rem; font-size:.75rem;
-  margin:.2rem 0; color:#475569;}
-.occ-card .k {flex:0 0 5.3rem; font-weight:600; text-transform:uppercase;
-  letter-spacing:.4px; font-size:.64rem; color:#64748B;}
+.occ-card .row {display:flex; align-items:center; gap:.45rem; font-size:.78rem;
+  margin:.2rem 0; color:#1F2937;}
+.occ-card .k {flex:0 0 5.3rem; font-weight:700; text-transform:uppercase;
+  letter-spacing:.4px; font-size:.64rem; color:#475569;}
 .jz {display:inline-flex; gap:3px;}
 .jz i {width:11px; height:11px; border-radius:3px; background:#E2E8F0; display:inline-block;}
 .jz i.on {background:#2563EB;}
-.gauge {position:relative; flex:1; height:9px; border-radius:6px;
-  background: linear-gradient(90deg,#2E7D5B 0 25%,#C9A227 55%,#B23A3A 85% 100%);
-  opacity:.9;}
-.gauge .m {position:absolute; top:-4px; width:4px; height:17px; border-radius:2px;
-  background:#111827; box-shadow:0 0 0 2px #fff;}
+.xbar {flex:1; display:flex; align-items:center; gap:.4rem; min-width:7rem;}
+.xbar .track {position:relative; flex:1; height:12px; border-radius:6px; background:#E5E7EB;
+  overflow:hidden;}
+.xbar .fill {position:absolute; left:0; top:0; height:100%; border-radius:6px;}
+.xbar .tick {position:absolute; top:0; width:1px; height:100%; background:rgba(17,24,39,.18);}
+.xbar .lo, .xbar .hi {font-size:.6rem; color:#6B7280; font-weight:600;}
 .pill {display:inline-block; font-size:.68rem; font-weight:700; color:#fff;
   border-radius:999px; padding:.05rem .5rem; white-space:nowrap;}
-.chip {display:inline-block; font-size:.7rem; background:rgba(100,116,139,.12);
-  border-radius:6px; padding:.05rem .4rem; margin:.1rem .15rem 0 0; color:#334155;}
+.chip {display:inline-block; font-size:.72rem; background:rgba(100,116,139,.12);
+  border-radius:6px; padding:.05rem .4rem; margin:.1rem .15rem 0 0; color:#1F2937;}
 .sec-title {font-size:.78rem; font-weight:700; letter-spacing:.8px; text-transform:uppercase;
-  color:#64748B; margin:.7rem 0 .35rem;}
-.src-row {font-size:.86rem; line-height:1.45; padding:.3rem 0;
+  color:#475569; margin:.7rem 0 .35rem;}
+.src-row {font-size:.88rem; line-height:1.45; padding:.3rem 0;
   border-bottom:1px solid rgba(120,130,150,.15);}
-.src-meta {color:#5B7290; font-size:.74rem;}
-.method {border:1px solid rgba(234,88,12,.28); border-left:6px solid #EA580C;
-  border-radius:14px; padding:.75rem 1rem .6rem; margin:.1rem 0 .55rem;
-  background: rgba(234,88,12,.045);}
+.src-meta {color:#475569; font-size:.76rem;}
+.method {border:1px solid rgba(37,99,235,.25); border-left:6px solid #2563EB;
+  border-radius:14px; padding:.75rem 1rem .6rem; margin:.6rem 0 .4rem;
+  background: rgba(37,99,235,.04);}
 .method .lbl {font-size:.7rem; font-weight:700; letter-spacing:.9px;
-  text-transform:uppercase; color:#C2410C;}
-.method .sum {font-size:.88rem; line-height:1.5; margin:.2rem 0 .45rem;}
+  text-transform:uppercase; color:#1D4ED8;}
+.method .meaning {font-size:.95rem; line-height:1.55; margin:.25rem 0 .6rem; font-weight:500;}
+.method .sum {font-size:.86rem; line-height:1.5; margin:.2rem 0 .45rem; color:#1F2937;}
 .method .formula {font: 600 .86rem/1.5 ui-monospace, Consolas, monospace;
   background: rgba(15,23,42,.06); border-radius:8px; padding:.3rem .6rem;
   display:inline-block; margin-bottom:.5rem;}
@@ -87,7 +88,7 @@ CSS = """
 .method .dir {font-size:.66rem; font-weight:700; text-transform:uppercase; letter-spacing:.4px;}
 .method .calc {font-size:.8rem; line-height:1.55; margin:.1rem 0 .45rem;}
 .method .calc code {font-size:.76rem;}
-.method .refs {font-size:.74rem; line-height:1.5; color:#475569; margin:0; padding-left:1.1rem;}
+.method .refs {font-size:.76rem; line-height:1.5; color:#374151; margin:0; padding-left:1.1rem;}
 .method .refs a {color:#1D4ED8;}
 </style>
 """
@@ -122,13 +123,17 @@ _DIM_ORDER = [("Digital", "raises exposure", "#C2622F"),
               ("Physical", "lowers exposure", "#3B6E8F")]
 
 
-def method_html(ans) -> str:
-    """How the AI exposure scores were computed: source, data, formula, each
-    occupation's own calculation, and the references. Text is fixed (from
-    ai_exposure.METHOD_*), not model output."""
-    m = ans.exposure_method
-    if not m:
-        return ""
+def method_html(ans=None) -> str:
+    """What the AI exposure score means, then how it was computed: source,
+    data, formula, each occupation's own calculation, and the references.
+    Text is fixed (from ai_exposure.METHOD_* / MEANING), not model output.
+    With no answer the general explanation is returned (no calculations)."""
+    if ans is None:
+        m = ai_exposure.methodology()
+    else:
+        m = ans.exposure_method
+        if not m:
+            return ""
     esc = _html.escape
     dims = []
     for name, effect, col in _DIM_ORDER:
@@ -137,17 +142,22 @@ def method_html(ans) -> str:
                     f"<span class='dir' style='color:{col}'>{esc(effect)}</span><br>"
                     + "; ".join(esc(v) for v in vs) + "</div>")
     calc = []
-    for r in ans.ai_exposure:
+    for r in (ans.ai_exposure if ans is not None else []):
         x = r.get("exposure")
         if x:
             calc.append(f"<b>{esc(r['title'])}</b>: <code>{esc(x['calculation'])}</code>")
-    missing = [r["title"] for r in ans.ai_exposure if not r.get("exposure")]
+    missing = [r["title"] for r in (ans.ai_exposure if ans is not None else [])
+               if not r.get("exposure")]
     if missing:
         calc.append("Not covered by the index (no score): " + esc(", ".join(missing)))
+    if calc:
+        calc.insert(0, "<span class='lbl'>Occupations in your latest answer about AI</span>")
     refs = "".join(f"<li>{esc(r['citation'])} <a href='{esc(r['url'])}' target='_blank'>"
                    f"{esc(r['url'])}</a></li>" for r in m["references"])
     return f"""
 <div class='method'>
+  <div class='lbl'>About the AI exposure score</div>
+  <div class='meaning'>{esc(m['meaning'])}</div>
   <div class='lbl'>How the AI exposure scores are calculated</div>
   <div class='sum'>{esc(m['summary'])} Scores are taken from the {esc(ai_exposure.SOURCE_NAME)}
   (third-party, not part of O*NET) and matched to each O*NET occupation by SOC code and title.</div>
@@ -159,30 +169,63 @@ def method_html(ans) -> str:
 </div>"""
 
 
-def method_details(ans) -> None:
-    """Expandable full methodology: the nine O*NET variables, steps, limits."""
-    m = ans.exposure_method
+def method_details(ans=None) -> None:
+    """The nine O*NET variables (table) and the data-join note."""
+    m = ai_exposure.methodology() if ans is None else ans.exposure_method
     if not m:
         return
-    with st.expander("AI exposure methodology in detail: the 9 O*NET variables, "
-                     "steps and limitations"):
-        st.dataframe(pd.DataFrame(m["variables"]).rename(columns={
-            "variable": "O*NET variable", "onet_element": "O*NET element",
-            "scale": "O*NET section / scale", "dimension": "Dimension",
-            "direction": "Direction"}), hide_index=True, width="stretch")
-        def md(s: str) -> str:            # "O*NET" must not start italics
-            return s.replace("*", "\\*")
+    st.dataframe(pd.DataFrame(m["variables"]).rename(columns={
+        "variable": "O*NET variable", "onet_element": "O*NET element",
+        "scale": "O*NET section / scale", "dimension": "Dimension",
+        "direction": "Direction"}), hide_index=True, width="stretch")
 
-        st.markdown("**Steps**\n" + "\n".join(f"{i}. {md(s)}" for i, s in enumerate(m["steps"], 1)))
-        st.markdown("**Limitations**\n" + "\n".join(f"- {md(s)}" for s in m["limitations"]))
-        st.caption(md(m["join"] + " The index uses O*NET 31.0; the chatbot graph is O*NET 30.3."))
+    def md(s: str) -> str:            # "O*NET" must not start italics
+        return s.replace("*", "\\*")
+
+    st.caption(md(m["join"] + " The index uses O*NET 31.0; the chatbot graph is O*NET 30.3."))
 
 
-def methodology(ans) -> None:
-    h = method_html(ans)
-    if h:
-        st.markdown(h, unsafe_allow_html=True)
-        method_details(ans)
+METHOD_PROMPT = "Where does the AI exposure score come from?"
+
+
+def exposure_panel(ans=None) -> None:
+    """Body of the "Where does the AI exposure score come from?" panel in the
+    info bar (kept apart from the chat): what the score means, how it is
+    calculated, the full methodology and references. When the latest answer
+    about AI is passed, its occupations' own calculations are included."""
+    if ans is not None and not (getattr(ans, "ai_relevant", False) and ans.exposure_method):
+        ans = None
+    st.markdown(method_html(ans), unsafe_allow_html=True)
+    method_details(ans)
+
+
+_NOT_COVERED = re.compile(r"^\s*(insufficient evidence|the evidence does not cover|"
+                          r"no evidence)", re.I)
+
+
+def grounding_notice(ans) -> None:
+    """One clear statement, before anything else, when the answer is not
+    backed by the retrieved O*NET records - so the reader never has to work
+    out whether a list of occupations came from the data or from the model."""
+    jobs = [e.name for e in ans.entities if e.label == "Job"]
+    about = f" about {', '.join(jobs[:3])}" if jobs else ""
+    if ans.status == "ungrounded" or (not ans.citations and ans.parsed is not None):
+        st.error("**This answer is not based on O*NET evidence.** The model cited no "
+                 f"retrieved record{about}, so anything it says - including any "
+                 "occupations it names - comes from the model itself and may not be "
+                 "relevant to your question. Try naming the occupation exactly as "
+                 "O*NET does, or confirm one of the suggested matches.", icon="⚠️")
+        return
+    if _NOT_COVERED.match(ans.headline or ""):
+        st.warning("**The retrieved O*NET records do not cover what you asked.** The "
+                   "answer below says what the evidence does and does not contain; no "
+                   "occupation is recommended without a cited record.", icon="⚠️")
+    unsupported = ans.unsupported_occupations
+    if unsupported:
+        st.warning("**Not supported by the evidence:** " + ", ".join(unsupported) +
+                   ". The model listed these occupations without citing any O*NET "
+                   "record for them (marked on the cards), so treat them as the "
+                   "model's own suggestion, not as a data-based result.", icon="⚠️")
 
 
 def headline(ans) -> None:
@@ -197,14 +240,6 @@ def headline(ans) -> None:
                     unsafe_allow_html=True)
 
 
-def key_points(ans) -> None:
-    if not ans.key_points:
-        return
-    st.markdown("<div class='sec-title'>Key points</div>", unsafe_allow_html=True)
-    st.markdown("".join(f"<div class='kp'><span class='n'>{i}</span><span>{rich(p)}</span></div>"
-                        for i, p in enumerate(ans.key_points, 1)), unsafe_allow_html=True)
-
-
 def _jz_html(jz) -> str:
     if jz is None:
         return "<span class='chip'>n/a</span>"
@@ -214,19 +249,31 @@ def _jz_html(jz) -> str:
 
 
 def _gauge_html(x: dict | None) -> str:
+    """Horizontal bar graph of the AI exposure score on a 0-1 track (quarter
+    ticks), filled in the score's colour, with the value as a pill."""
     if not x:
         return "<span class='chip'>not in AI Exposure Index</span>"
     pos = max(0.0, min(1.0, float(x["composite"]))) * 100
-    return (f"<div class='gauge'><div class='m' style='left:calc({pos:.1f}% - 2px)'></div></div>"
-            f"<span class='pill' style='background:{x['color']}'>{x['composite']:.2f}</span>")
+    ticks = "".join(f"<span class='tick' style='left:{t}%'></span>" for t in (25, 50, 75))
+    return (f"<div class='xbar' title='AI exposure {x['composite']:.2f} on a 0-1 scale'>"
+            f"<span class='lo'>0</span><div class='track'>{ticks}"
+            f"<div class='fill' style='width:{pos:.1f}%;background:{x['color']}'></div></div>"
+            f"<span class='hi'>1</span>"
+            f"<span class='pill' style='background:{x['color']}'>{x['composite']:.2f}</span></div>")
 
 
-def occupation_card_html(c: dict, current: dict | None = None) -> str:
+def occupation_card_html(c: dict, current: dict | None = None,
+                         show_exposure: bool = True) -> str:
+    """One occupation card. The AI exposure bar graph is always drawn under
+    Job Zone; `show_exposure` only adds the difference to the current job
+    (AI / career questions)."""
     rank = (f"<span class='rank'>#{c['related_rank']} related</span>"
             if c.get("related_rank") else "")
+    if c.get("source") == "model" and not c.get("citations"):
+        rank += "<span class='nocite'>no evidence cited</span>"
     x = c.get("ai_exposure")
     delta = ""
-    if x and current and current.get("composite") is not None:
+    if show_exposure and x and current and current.get("composite") is not None:
         d = x["composite"] - current["composite"]
         arrow = "▼" if d < 0 else "▲"
         col = "#2E7D5B" if d < 0 else "#B23A3A"
@@ -261,23 +308,26 @@ def current_job_strip(ans) -> dict | None:
 
 
 def occupation_cards(ans, engine) -> None:
+    show_x = ans.exposure_in_evidence      # scores only for AI / career questions
     cur = current_job_strip(ans)
     if cur is not None:
         card = engine.occupation_card(cur["soc"])
         card.update(fit="", citations=[c for c in ans.citations
                                        if c in (f"N-{cur['soc']}", f"X-{cur['soc']}")])
         st.markdown("<div class='sec-title'>Your occupation</div>", unsafe_allow_html=True)
-        st.markdown(occupation_card_html(card), unsafe_allow_html=True)
+        st.markdown(occupation_card_html(card, show_exposure=show_x), unsafe_allow_html=True)
     if not ans.occupations:
         return
     label = "Recommended occupations" if cur is not None else "Occupations"
     st.markdown(f"<div class='sec-title'>{label} ({len(ans.occupations)})</div>",
                 unsafe_allow_html=True)
-    cur_x = (cur or {}).get("exposure")
-    cols = st.columns(3)
+    cur_x = (cur or {}).get("exposure") if show_x else None
+    per_row = 2 if len(ans.occupations) <= 4 else 3
+    cols = st.columns(per_row)
     for i, c in enumerate(ans.occupations):
-        with cols[i % 3]:
-            st.markdown(occupation_card_html(c, cur_x), unsafe_allow_html=True)
+        with cols[i % per_row]:
+            st.markdown(occupation_card_html(c, cur_x, show_exposure=show_x),
+                        unsafe_allow_html=True)
 
 
 # ------------------------------------------------------------------ charts
@@ -422,7 +472,7 @@ def ratings_chart(df: pd.DataFrame) -> alt.Chart:
 
 def charts(ans, engine) -> None:
     shown = False
-    df = exposure_frame(ans)
+    df = exposure_frame(ans) if ans.exposure_in_evidence else pd.DataFrame()
     if not df.empty:
         shown = True
         st.markdown("**AI exposure of the occupations in this answer**")
@@ -438,7 +488,7 @@ def charts(ans, engine) -> None:
                         "(lower-left = less preparation and less exposed)")
             st.altair_chart(pm, width="stretch")
     missing = [r["title"] for r in ans.ai_exposure if not r.get("exposure")]
-    if missing:
+    if missing and ans.exposure_in_evidence:
         st.caption("Not covered by the AI Exposure Index: " + ", ".join(missing) + ".")
     rf = ratings_frame(ans, engine)
     if not rf.empty:

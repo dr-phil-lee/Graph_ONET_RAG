@@ -138,10 +138,14 @@ def test_cards_are_validated_and_enriched_from_the_graph(engine):
     assert ans.exposure_method and ans.exposure_method["references"]
     d = ans.to_dict(include_evidence=False)
     keys = list(d)
-    assert keys.index("ai_exposure_method") < keys.index("headline")
+    # the methodology comes last, and only for questions about AI
+    assert keys[-1] == "ai_exposure_method" and d["ai_exposure_method"]["references"]
+    assert ans.ai_relevant and ans.exposure_in_evidence     # the model cited an X- line
+    assert ans.exposure_method["meaning"].startswith("The AI exposure score shows")
     assert "tier" not in json.dumps(d["ai_exposure"]) + json.dumps(d["occupations"]).replace(
         "related_tier", "")
     html = answer_view.method_html(ans)
+    assert "About the AI exposure score" in html and ai_exposure.MEANING[:40] in html
     assert "How the AI exposure scores are calculated" in html
     assert "(0.70 - 0.50 - 0.31 + 2) / 3 = 0.63" in html and ai_exposure.METHOD_URL in html
     roles = {r["soc"]: r["role"] for r in ans.ai_exposure}
