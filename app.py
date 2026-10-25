@@ -52,6 +52,16 @@ st.markdown(
 [data-testid="stHeader"] {background: transparent !important;}
 [data-testid="stBottomBlockContainer"] {max-width: 1340px;}
 [data-testid="stBottomBlockContainer"] [data-testid="stChatInput"] {max-width: 67%;}
+
+/* ---- chat box: a clear blue outline so it is obvious where to type ---- */
+[data-testid="stChatInput"] {border: 2px solid #2563EB !important; border-radius: 16px !important;
+  background: #fff !important; box-shadow: 0 0 0 4px rgba(37,99,235,.14), 0 4px 16px rgba(37,99,235,.18);
+  transition: box-shadow .15s, border-color .15s;}
+[data-testid="stChatInput"]:focus-within {border-color: #1D4ED8 !important;
+  box-shadow: 0 0 0 5px rgba(37,99,235,.24), 0 6px 20px rgba(37,99,235,.24);}
+[data-testid="stChatInput"] textarea {background: transparent !important; color: #111827;}
+[data-testid="stChatInput"] textarea::placeholder {color: #4B5563 !important; opacity: 1;}
+[data-testid="stChatInputSubmitButton"] svg {color: #2563EB; fill: #2563EB;}
 h1, h2, h3 {letter-spacing: -0.01em;}
 div[data-testid="stCaptionContainer"] {opacity: 1 !important;}
 div[data-testid="stCaptionContainer"], div[data-testid="stCaptionContainer"] p,
@@ -623,8 +633,7 @@ with chat_col:
         confirmation_card(ss.pending_confirm)
 
 # the chat box stays at top level so Streamlit pins it to the bottom
-typed = st.chat_input("Ask about occupations, tasks, skills, AI exposure... "
-                      "(follow-ups remember the conversation)")
+typed = st.chat_input("Type your question here… (follow-ups remember the chat)")
 question = typed or ss.pop("pending_question", None)
 if question:
     pending, ss.pending_confirm = ss.pending_confirm, None
