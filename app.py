@@ -37,13 +37,19 @@ st.set_page_config(page_title="GraphRAG-Based O*NET Chatbot", page_icon="🧭", 
 st.markdown(
     """
 <style>
-/* ---- hide Streamlit's own controls (deploy button, toolbar, status widget,
-   main menu, footer) so nothing but the app itself is shown ---- */
-.stAppDeployButton, [data-testid="stToolbar"], [data-testid="stStatusWidget"],
-  [data-testid="stDecoration"], #MainMenu, footer {display: none !important;}
+/* ---- hide Streamlit's own controls (deploy button, main menu, status
+   widget, top decoration line, footer) so nothing but the app itself is
+   shown. The toolbar container itself must stay: when the sidebar is
+   collapsed, the button that re-opens it lives inside it. ---- */
+.stAppDeployButton, [data-testid="stStatusWidget"], [data-testid="stDecoration"],
+  [data-testid="stMainMenu"], #MainMenu, footer {display: none !important;}
+[data-testid="stToolbar"] [data-testid="stToolbarActions"] {display: none !important;}
 
 /* ---- layout: one readable column, like a chat app ---- */
-.block-container {padding-top: .9rem; padding-bottom: 6rem; max-width: 1340px;}
+/* Streamlit keeps a fixed bar across the top of the page (on Streamlit Cloud it
+   is opaque and taller); start the content below it and let it show through */
+.block-container {padding-top: 3.6rem; padding-bottom: 6rem; max-width: 1340px;}
+[data-testid="stHeader"] {background: transparent !important;}
 [data-testid="stBottomBlockContainer"] {max-width: 1340px;}
 [data-testid="stBottomBlockContainer"] [data-testid="stChatInput"] {max-width: 67%;}
 h1, h2, h3 {letter-spacing: -0.01em;}
