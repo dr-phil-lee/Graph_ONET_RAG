@@ -233,8 +233,7 @@ with st.sidebar:
     st.markdown(
         f"<div class='modelnote'>🤖 Model: <b>{bootstrap.OPENROUTER_MODEL_NAME}</b> "
         f"<code>{ss.or_model}</code><br>Every answer is written by this cost-efficient, "
-        "high-performance general-purpose model. The evidence it writes from comes from "
-        "the O*NET knowledge graph and never depends on the model.</div>",
+        "high-performance general-purpose model.</div>",
         unsafe_allow_html=True)
     if st.button("Apply key", width="stretch"):
         if not key_input.strip():
