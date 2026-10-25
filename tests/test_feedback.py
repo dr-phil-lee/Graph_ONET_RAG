@@ -160,9 +160,39 @@ def test_focus_graph_is_the_same_whichever_model_cites(engine):
     b = _with_llm(engine, FakeLLM(raw_override=_structured([], [f"E{first}"])), q)
     seed_edges = {e for e in a.retrieved_edge_ids
                   if RN in engine.edge_index[e][:2]}
-    assert seed_edges and seed_edges <= set(a.focus_edge_ids) <= set(a.retrieved_edge_ids)
-    assert set(a.focus_edge_ids) == set(b.focus_edge_ids)      # same graph ...
+    assert seed_edges and set(a.focus_edge_ids) == seed_edges    # retrieval alone
+    assert a.focus_edge_ids == b.focus_edge_ids                  # same graph ...
+    assert a.focus_node_ids == b.focus_node_ids == [RN]
     assert a.cited_edge_ids != b.cited_edge_ids                  # ... different highlights
+
+
+def test_graph_layout_is_deterministic():
+    """vis.js is given a fixed randomSeed, so identical records draw the
+    same picture on every render."""
+    import json
+    import graph_view
+    opts = json.loads(graph_view._OPTIONS)
+    assert opts["layout"]["randomSeed"] == 7
+
+
+def test_pivot_map_labels_do_not_overlap():
+    """Occupations in the same Job Zone get stacked label positions."""
+    import pandas as pd
+    import answer_view as av
+    df = pd.DataFrame([
+        {"occupation": "Customer Service Representatives", "Job Zone": 2, "AI exposure": 0.25},
+        {"occupation": "Counter and Rental Clerks", "Job Zone": 2, "AI exposure": 0.26},
+        {"occupation": "Telemarketers", "Job Zone": 2, "AI exposure": 0.28},
+        {"occupation": "Retail Salespersons", "Job Zone": 2, "AI exposure": 0.85},
+        {"occupation": "Registered Nurses", "Job Zone": 4, "AI exposure": 0.40},
+    ])
+    out = av._place_labels(df)
+    ys = out.set_index("occupation")["label_y"]
+    close = ["Customer Service Representatives", "Counter and Rental Clerks", "Telemarketers"]
+    assert len({round(ys[t], 3) for t in close}) == 3          # three distinct levels
+    assert ys["Retail Salespersons"] == ys["Customer Service Representatives"]  # far right: level 0 again
+    assert ys["Registered Nurses"] > 4 and ys["Telemarketers"] != ys["Registered Nurses"]
+    assert all(abs(y - z) >= 0.15 for y, z in zip(ys, out.set_index("occupation")["Job Zone"]))
 
 
 def test_retrieval_is_identical_whichever_model_answers(engine):

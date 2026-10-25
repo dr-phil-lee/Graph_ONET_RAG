@@ -23,7 +23,10 @@ LABEL_COLORS = {
 _LABELED = {"Job", "DWA", "IWA", "GWA", "EssentialSkill", "TransferableSkill",
             "Ability", "Knowledge", "WorkStyle", "ElementGroup"}
 
+# layout.randomSeed makes vis.js place the nodes deterministically, so the
+# same records always give the same picture (whichever model answered)
 _OPTIONS = """{
+  "layout": {"randomSeed": 7, "improvedLayout": true},
   "physics": {"barnesHut": {"gravitationalConstant": -12000, "springLength": 140},
               "stabilization": {"iterations": 150}},
   "edges": {"smooth": false, "font": {"size": 9, "color": "#666666"}},

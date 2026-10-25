@@ -187,13 +187,23 @@ def test_headline_fallbacks():
     assert ChatEngine._headline({"answer": ["a", "b"]}).startswith("2 item(s)")
 
 
-def test_focus_graph_links_current_job_to_each_card(engine):
-    cards = [{"soc": CSR, "fit": "x"}, {"soc": CRC, "fit": "y"}]
+def test_focus_graph_is_built_from_retrieval_not_from_the_cards(engine):
+    """The Focus graph holds the retrieved records around the current job
+    (O*NET's related occupations among them); the cards the model lists do
+    not add anything to it, so it is the same whichever model answers."""
+    q = "I am a tele marketer and want to change to another job"
+    probe = _with_llm(engine, FakeLLM(), q)
+    related = [engine.edge_index[e][1] for e in probe.retrieved_edge_ids
+               if engine.edge_index[e][0] == TM and engine.edge_index[e][3]["type"] == "RELATED_TO"]
+    assert len(related) >= 2
+    rn = "29-1141.00"                                        # not retrieved for this question
+    cards = [{"soc": related[0], "fit": "x"}, {"soc": rn, "fit": "the model's own idea"}]
     llm = FakeLLM(raw_override=_structured(cards, [f"N-{TM}"]))
-    ans = _with_llm(engine, llm, "I am a tele marketer and want to change to another job")
+    ans = _with_llm(engine, llm, q)
     targets = {engine.edge_index[e][1] for e in ans.focus_edge_ids}
-    assert {CSR, CRC} <= targets
-    assert set(ans.focus_node_ids) >= {TM, CSR, CRC}
+    assert set(related) <= targets and rn not in targets
+    assert ans.focus_node_ids == [TM]
+    assert ans.focus_edge_ids == probe.focus_edge_ids        # cards changed nothing
     html = answer_view.focus_graph_html(ans, engine)
     assert "AI 0.63" in html and "ResizeObserver" in html
 

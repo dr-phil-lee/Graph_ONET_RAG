@@ -1251,31 +1251,20 @@ class ChatEngine:
                      cards: list[dict], citations: list[str],
                      retrieved_edges: list[int] = ()) -> tuple[list[int], list[str]]:
         """The knowledge graph of this question: every retrieved O*NET record
-        that touches an occupation the question is about. Retrieval runs
-        before the language model and does not depend on it, so this graph
-        is the same whichever model writes the answer; the model's citations
-        are only highlighted on it. Added so that every card hangs off the
-        graph: the cited edges, the Related Occupations edges from the
-        current job to each recommended one, and every occupation whose
-        profile or AI-exposure line was cited."""
+        that touches an occupation the question is about, plus the
+        occupations themselves (drawn even when no record touches them).
+        Retrieval runs before the language model and does not depend on it,
+        so this graph is built from retrieval alone and is the same whichever
+        model writes the answer. The model's citations and recommendations
+        never add edges or nodes to it; they only recolor what is there
+        (cited records in red). `cited_edges`, `cards` and `citations` are
+        accepted for the call signature and ignored."""
         focus = set(seed_jobs)
         edges = [int(e) for e in retrieved_edges
                  if int(e) in self.edge_index
                  and (self.edge_index[int(e)][0] in focus or self.edge_index[int(e)][1] in focus)]
-        have = set(edges)
-        for e in cited_edges:
-            if int(e) not in have:
-                have.add(int(e))
-                edges.append(int(e))
-        for c in cards:
-            for sj in seed_jobs:
-                for _, v, k, d in q.out_edges(self.G, sj, "RELATED_TO"):
-                    if v == c["soc"] and int(k) not in have:
-                        have.add(int(k))
-                        edges.append(int(k))
         nodes: list[str] = []
-        for n in seed_jobs + [c["soc"] for c in cards] + \
-                [u[2:] for u in citations if u.startswith(("N-", "X-"))]:
+        for n in seed_jobs:
             if n in self.G and n not in nodes:
                 nodes.append(n)
         return edges, nodes

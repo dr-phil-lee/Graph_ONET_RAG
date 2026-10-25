@@ -481,11 +481,11 @@ def render_answer(ans: Answer, idx: int, is_last: bool, entities: str | None = N
                       "higher)" if ans.exposure_in_evidence else "jobs are red")
             st.caption("The O*NET records retrieved for the occupation(s) you asked about. "
                        "They are pulled from the knowledge graph *before* the language "
-                       "model runs, so this graph is the same whichever model you choose; "
-                       "the model only writes from it. **Red** = records this model cited "
-                       "in its answer · grey dashed = retrieved but not cited. ★ = the "
-                       f"occupation you asked about; {colors}. Click any node or edge "
-                       "for details.")
+                       "model runs, so this graph - its records, nodes and layout - is "
+                       "the same whichever model you choose; the model only writes from "
+                       "it. **Red** = records this model cited in its answer · grey "
+                       "dashed = retrieved but not cited. ★ = the occupation you asked "
+                       f"about; {colors}. Click any node or edge for details.")
         else:
             st.info("No graph records were retrieved for this question.")
     with t_full:

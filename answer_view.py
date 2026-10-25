@@ -418,20 +418,59 @@ def pivot_map(ans, engine) -> alt.Chart | None:
                          "Job Zone": jz})
     if len(rows) < 2:
         return None
-    df = pd.DataFrame(rows)
+    df = _place_labels(pd.DataFrame(rows))
+    x_enc = alt.X("AI exposure:Q", scale=alt.Scale(domain=[0.2, 0.9]),
+                  title="Composite AI exposure →")
+    y_enc = alt.Y("Job Zone:Q", scale=alt.Scale(domain=[0.4, 5.7]),
+                  title="Job Zone (preparation needed) →", axis=alt.Axis(values=[1, 2, 3, 4, 5]))
     pts = alt.Chart(df).mark_point(filled=True, size=220, opacity=.9).encode(
-        x=alt.X("AI exposure:Q", scale=alt.Scale(domain=[0.2, 0.9]),
-                title="Composite AI exposure →"),
-        y=alt.Y("Job Zone:Q", scale=alt.Scale(domain=[0.5, 5.5]),
-                title="Job Zone (preparation needed) →", axis=alt.Axis(values=[1, 2, 3, 4, 5])),
+        x=x_enc, y=y_enc,
         color=alt.Color("AI exposure:Q", scale=_score_scale(), legend=None),
         shape=alt.Shape("role:N", scale=alt.Scale(domain=["current", "recommended", "discussed"],
                                                   range=["diamond", "circle", "square"]),
                         legend=alt.Legend(orient="bottom", title=None)),
         tooltip=["occupation", "role", "Job Zone", alt.Tooltip("AI exposure:Q", format=".4f")])
-    txt = alt.Chart(df).mark_text(align="left", dx=10, dy=-6, fontSize=11).encode(
-        x="AI exposure:Q", y="Job Zone:Q", text="occupation:N")
-    return (pts + txt).properties(height=330)
+    txt = alt.Chart(df).mark_text(align="left", dx=10, fontSize=11).encode(
+        x=x_enc, y=alt.Y("label_y:Q", scale=alt.Scale(domain=[0.4, 5.7])), text="label:N")
+    leaders = alt.Chart(df).mark_rule(color="#9CA3AF", strokeWidth=1).encode(
+        x=x_enc, y=y_enc, y2="label_y:Q")
+    return (leaders + pts + txt).properties(height=340)
+
+
+# conservative: a 0.7-wide x range on a ~500px plot; wider charts only gain room
+_PX_PER_X = 650         # ≈ pixels per 1.0 of AI exposure
+_PX_PER_CHAR = 6.6      # ≈ width of one character at 11px
+_ZONE_PX = 56           # ≈ pixels per Job Zone step (340px / 6 zones)
+
+
+def _place_labels(df: pd.DataFrame) -> pd.DataFrame:
+    """Occupations in the same Job Zone sit on one horizontal line, so
+    their labels would run into each other. Labels are placed greedily:
+    within a zone (left to right) each label takes the first stacking level
+    whose previous label has already ended; level 0 is just above the point,
+    level 1 just below, then further above / below. `label_y` is the label's
+    y in data units, drawn with a thin leader to the point."""
+    df = df.sort_values(["Job Zone", "AI exposure"]).reset_index(drop=True)
+    df["label"] = df["occupation"].map(lambda s: s if len(s) <= 36 else s[:35] + "…")
+    label_y = []
+    for _, grp in df.groupby("Job Zone", sort=False):
+        ends: list[float] = []            # per level: pixel x where its last label ends
+        for x, lab, zone in zip(grp["AI exposure"], grp["label"], grp["Job Zone"]):
+            px = float(x) * _PX_PER_X
+            for lvl, end in enumerate(ends):
+                if end < px - 4:
+                    break
+            else:
+                lvl = len(ends)
+                ends.append(0.0)
+            ends[lvl] = px + 12 + _PX_PER_CHAR * len(lab)
+            step = 14 / _ZONE_PX                              # ≈ one text line, in zone units
+            if lvl % 2 == 0:
+                label_y.append(float(zone) + 0.16 + step * (lvl // 2))
+            else:
+                label_y.append(float(zone) - 0.26 - step * (lvl // 2))
+    df["label_y"] = label_y
+    return df
 
 
 def _job_zone(engine, soc: str):
