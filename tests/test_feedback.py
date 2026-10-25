@@ -36,6 +36,60 @@ def test_exact_titles_skills_and_follow_ups_need_no_confirmation(engine):
     assert not engine.propose_occupations("Which of those is least exposed?", history=hist)["confirm"]
 
 
+def test_every_name_not_written_as_its_full_title_is_confirmed(engine):
+    """'zookeepers' is an alternate title (Animal Caretakers) and 'preschool
+    teachers' is not the full title 'Preschool Teachers, Except Special
+    Education': the card asks about both, each with its own candidates."""
+    p = engine.propose_occupations(
+        "Do zookeepers and preschool teachers have any work tasks in common?")
+    assert p["confirm"]
+    by_term = {t["term"]: t["candidates"][0] for t in p["terms"]}
+    assert by_term == {"preschool teacher": ("25-2011.00", "Preschool Teachers, Except Special Education"),
+                       "zookeeper": ("39-2021.00", "Animal Caretakers")}
+    # full titles written out need no confirmation
+    assert not engine.propose_occupations("Compare Software Developers and Data Scientists.")["confirm"]
+
+
+def test_title_in_text_handles_plurals_and_qualifiers():
+    from engine import title_in_text
+    assert title_in_text("Registered Nurses", "What does a registered nurse do?")
+    assert title_in_text("Telemarketers", "I am a telemarketer")
+    assert title_in_text("zookeeper", "Do zookeepers and teachers share tasks?")
+    assert not title_in_text("Preschool Teachers, Except Special Education",
+                             "Do zookeepers and preschool teachers share tasks?")
+
+
+def test_seeded_occupations_are_not_flagged_as_unsupported(engine, fake_llm):
+    """Cards for the occupations the question was about are backed by their
+    retrieved profiles even when the model left their citations empty."""
+    from tests.test_structured_memory import _structured, _with_llm
+    cards = [{"soc": "39-2021.00", "title": "Animal Caretakers", "fit": "x"},
+             {"soc": "25-2011.00", "title": "Preschool Teachers, Except Special Education", "fit": "y"}]
+    llm = FakeLLM(raw_override=_structured(cards, ["N-39-2021.00"]))
+    ans = _with_llm(engine, llm, "Do zookeepers and preschool teachers share tasks?")
+    assert {c["soc"] for c in ans.occupations} == {"39-2021.00", "25-2011.00"}
+    assert ans.unsupported_occupations == []
+    # ... and the model is told how the wording maps to O*NET titles
+    assert "'zookeeper' = Animal Caretakers (39-2021.00)" in llm.last_user
+    assert "'preschool teacher' = Preschool Teachers, Except Special Education" in llm.last_user
+
+
+def test_unknown_occupation_is_reported_as_missing(engine):
+    old = engine.default_llm
+    engine.default_llm = FakeLLM(link_reply=["Glorb Whisperers"])
+    try:
+        p = engine.propose_occupations("What does a glorb whisperer earn?")
+    finally:
+        engine.default_llm = old
+    assert p["confirm"] and p["terms"] == [
+        {"term": "Glorb Whisperers", "candidates": [], "via": "model"}]
+
+
+def test_plural_model_name_matches_the_singular_alternate_title(engine):
+    hits = engine._close_occupations("Zookeepers")
+    assert hits[0]["soc"] == "39-2021.00" and hits[0]["score"] >= 90
+
+
 def test_model_read_occupation_is_offered_for_confirmation(engine):
     old = engine.default_llm
     engine.default_llm = FakeLLM(link_reply=["Telemarketers"])
@@ -85,11 +139,30 @@ def test_prompt_tells_the_model_to_be_honest_about_gaps(engine, fake_llm):
 
 # ------------------------------------------------------------- grounding
 def test_unsupported_occupations_are_flagged(engine):
+    """A listed occupation the question was not about, with no citation on
+    its card and no cited line about it, is the model's own suggestion."""
     from tests.test_structured_memory import _structured, _with_llm
-    cards = [{"soc": "43-4051.00", "title": "Customer Service Representatives", "fit": "no cite"}]
+    cards = [{"soc": "43-4051.00", "title": "Customer Service Representatives", "fit": "cited in headline"},
+             {"soc": "41-3011.00", "title": "Advertising Sales Agents", "fit": "no cite anywhere"}]
     llm = FakeLLM(raw_override=_structured(cards, [f"N-{TM}"]))
     ans = _with_llm(engine, llm, "I am a tele marketer and want to change to another job")
-    assert ans.unsupported_occupations == ["Customer Service Representatives"]
+    assert ans.unsupported_occupations == ["Advertising Sales Agents"]
+
+
+# ---------------------------------------------------- model-independent graph
+def test_focus_graph_is_the_same_whichever_model_cites(engine):
+    """The retrieved records around the occupations asked about are shown
+    for every model; different citations only change the highlighting."""
+    from tests.test_structured_memory import _structured, _with_llm
+    q = "What does a Registered Nurse do?"
+    a = _with_llm(engine, FakeLLM(raw_override=_structured([], [f"N-{RN}"])), q)
+    first = a.retrieved_edge_ids[0]
+    b = _with_llm(engine, FakeLLM(raw_override=_structured([], [f"E{first}"])), q)
+    seed_edges = {e for e in a.retrieved_edge_ids
+                  if RN in engine.edge_index[e][:2]}
+    assert seed_edges and seed_edges <= set(a.focus_edge_ids) <= set(a.retrieved_edge_ids)
+    assert set(a.focus_edge_ids) == set(b.focus_edge_ids)      # same graph ...
+    assert a.cited_edge_ids != b.cited_edge_ids                  # ... different highlights
 
 
 # ---------------------------------------------------------------- budget

@@ -412,20 +412,34 @@ const {answer, citations, status, evidence} = await r.json();
   score come from?" (what the score means, the source index, the formula,
   the nine O*NET variables and references; when the
   latest answer was about AI, its occupations' own calculations are listed).
-- **Occupation confirmation** — if the question names no occupation that
-  exists in O*NET under that exact title, the assistant replies with the
-  closest O*NET occupations (from the wording, or from the model's reading of
-  the message when the wording names none), pre-selects the best one and
-  waits: tick the ones to proceed with, pick any other occupation from the
-  searchable list, type an occupation name in the chat box, or "Answer
-  without choosing". Exact titles, alternate titles, skill/task questions and
+- **Occupation confirmation** — every occupation name in the question that
+  is not written as its full O*NET title is checked before anything is
+  generated ("zookeepers and preschool teachers" asks about both: Animal
+  Caretakers, and Preschool Teachers, Except Special Education; "Software
+  Developers and Data Scientists" asks about neither). The assistant shows
+  the closest O*NET occupation with its O*NET-SOC code and description and
+  asks "shall I proceed with it?": tick the ones to use, pick any other occupation
+  from the searchable list, type an occupation name in the chat box, or
+  "Answer anyway". A name with no close O*NET occupation at all (nothing
+  whose title or alternate title contains it) is reported as missing - "O*NET
+  has no occupation matching X, please check the name and ask again" - so
+  the user re-checks it first. Candidates come from the wording and, when a
+  model key is set, from the model's reading of the message ("I sell things
+  over the phone" -> Telemarketers). Exact titles, skill/task questions and
   follow-ups ("which of those...") need no confirmation.
 - **Chat** — each answer opens directly on six clickable views drawn as
   pill buttons under a "click each tab" hint (📝 Answer · 🎯 Focus graph ·
   🕸️ Evidence graph · 📚 Sources · 🔎 Evidence · 📊 Charts). The Answer view
   holds the whole response: a grounding notice (only when the evidence did
-  not cover the question or the model listed occupations without citing a
-  record for them), the headline banner, the answer text with citation
+  not cover the question, or the model listed an occupation whose records
+  were never retrieved and that no cited line mentions; the occupations the
+  question was about are backed by their retrieved profiles and are never
+  flagged), and the 🎯 Focus graph shows the retrieved O*NET records around
+  the occupations asked about - retrieval runs before the model, so the graph
+  is identical whichever model answers; the model's citations are only
+  highlighted in red on it (the 🕸️ Evidence graph shows everything
+  retrieved). A "Note" box under the six buttons explains what each view
+  shows and highlights the open one, the headline banner, the answer text with citation
   chips, then a card for your occupation and one per recommended occupation
   (Job Zone blocks, an AI exposure bar graph on a 0-1 track, top skills,
   sources, and - for AI / career questions - the difference to your

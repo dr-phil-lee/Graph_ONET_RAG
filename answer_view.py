@@ -33,6 +33,15 @@ CSS = """
 .ans-headline .txt {font-size: 1.12rem; font-weight: 650; line-height: 1.45;
   color: inherit; margin-top: .15rem;}
 .ans-interp {font-size: .8rem; color: #4B5563; margin: -.35rem 0 .6rem .2rem;}
+.note {border: 1px solid #D1D5DB; border-left: 5px solid #6B7280; border-radius: 10px;
+  background: #F9FAFB; padding: .5rem .8rem .45rem; margin: .1rem 0 .7rem; font-size: .84rem;
+  line-height: 1.45; color: #1F2937;}
+.note .lbl {font-size: .68rem; font-weight: 800; letter-spacing: .8px; text-transform: uppercase;
+  color: #374151; margin-bottom: .2rem;}
+.note ul {margin: 0; padding-left: 1.1rem;}
+.note li {margin: .08rem 0;}
+.note li.cur {background: #EFF4FF; border-radius: 6px; padding: .05rem .35rem; margin-left: -.35rem;}
+.note b {color: #111827;}
 .cite {display:inline-block; font: 600 .68rem/1.4 ui-monospace, Consolas, monospace;
   color:#1D4ED8; background: rgba(37,99,235,.09); border: 1px solid rgba(37,99,235,.25);
   border-radius: 6px; padding: 0 .35rem; margin: 0 .1rem; vertical-align: 1px;}
@@ -557,6 +566,39 @@ def evidence_table(ans) -> None:
           "Statement": (text[len(uid) + 3:] if text.startswith(f"[{uid}] ") else text)}
          for uid, text, cited in rows])
     st.dataframe(df, hide_index=True, width="stretch", height=380)
+
+
+VIEW_NOTES = [
+    ("📝 Answer", "the written answer: headline, text with citation chips, and a card "
+                  "per occupation (Job Zone, AI exposure bar, top skills, sources)."),
+    ("🎯 Focus graph", "the retrieved O*NET records that are directly linked to the "
+                       "occupation(s) you asked about (★). It is the same whichever "
+                       "model answers; red = records this model cited, grey dashed = "
+                       "retrieved but not cited."),
+    ("🕸️ Evidence graph", "everything retrieved for this question - the whole evidence "
+                          "the model was given, including related occupations and their "
+                          "own records, so it is larger than the Focus graph."),
+    ("📚 Sources", "the O*NET records the answer actually cites, grouped by the O*NET "
+                   "table each comes from."),
+    ("🔎 Evidence", "every evidence line handed to the model, as text; ✓ marks the "
+                    "lines the answer cites."),
+    ("📊 Charts", "the O*NET ratings in the evidence and, for questions about AI, the "
+                  "AI exposure scores of the occupations in this answer."),
+]
+
+
+def views_note_html(current: str | None = None) -> str:
+    """The 'Note' box shown under the six view buttons: one line per view;
+    the open view is highlighted."""
+    items = "".join(
+        f"<li class='{'cur' if name == current else ''}'><b>{_html.escape(name)}</b> — "
+        f"{_html.escape(text)}</li>" for name, text in VIEW_NOTES)
+    return (f"<div class='note'><div class='lbl'>Note — what each view shows</div>"
+            f"<ul>{items}</ul></div>")
+
+
+def views_note(current: str | None = None) -> None:
+    st.markdown(views_note_html(current), unsafe_allow_html=True)
 
 
 def answer_body(ans) -> None:

@@ -53,6 +53,16 @@ st.markdown(
 [data-testid="stBottomBlockContainer"] {max-width: 1340px;}
 [data-testid="stBottomBlockContainer"] [data-testid="stChatInput"] {max-width: 67%;}
 
+/* ---- API key box: the same blue outline as the chat box ---- */
+.st-key-apikey [data-testid="stTextInputRootElement"]
+  {border: 2px solid #2563EB !important; border-radius: 12px !important; background: #fff !important;
+   box-shadow: 0 0 0 3px rgba(37,99,235,.14); transition: box-shadow .15s, border-color .15s;}
+.st-key-apikey [data-testid="stTextInputRootElement"]:focus-within {border-color: #1D4ED8 !important;
+  box-shadow: 0 0 0 4px rgba(37,99,235,.24);}
+.st-key-apikey input {background: transparent !important;}
+.st-key-apikey input::placeholder {color: #4B5563 !important; opacity: 1;}
+.st-key-apikey label p {font-weight: 700; color: #1D4ED8;}
+
 /* ---- chat box: a clear blue outline so it is obvious where to type ---- */
 [data-testid="stChatInput"] {border: 2px solid #2563EB !important; border-radius: 16px !important;
   background: #fff !important; box-shadow: 0 0 0 4px rgba(37,99,235,.14), 0 4px 16px rgba(37,99,235,.18);
@@ -155,6 +165,10 @@ div[data-testid="stColumn"]:has(.st-key-infobar) {position: sticky; top: 3.2rem;
   color:#B45309;}
 .confirm .q {font-size:1rem; font-weight:650; margin:.25rem 0 .2rem;}
 .confirm .d {font-size:.9rem; line-height:1.5;}
+.cand {font-size:.95rem; margin:.5rem 0 .1rem; color:#111827;}
+.cand .soc {font: 600 .78rem/1.4 ui-monospace, Consolas, monospace; color:#1D4ED8;
+  background:#EFF4FF; border:1px solid #BFD3FF; border-radius:6px; padding:0 .4rem; margin-left:.25rem;}
+.cand .blurb {font-size:.84rem; color:#374151; line-height:1.45; margin-top:.15rem;}
 
 /* ---- buttons ---- */
 .stDownloadButton button {font-weight: 600;}
@@ -233,10 +247,12 @@ with st.sidebar:
                "English questions work best.")
 
     st.subheader("Model (OpenRouter)")
-    key_input = st.text_input(
-        "API key", type="password", value=ss.or_key,
-        help="Get one at openrouter.ai. Kept only in this browser session "
-             "(or in Chatbot/.env as OPENROUTER_API_KEY).")
+    with st.container(key="apikey"):          # styled like the chat box
+        key_input = st.text_input(
+            "API key", type="password", value=ss.or_key,
+            placeholder="Paste your OpenRouter API key here",
+            help="Get one at openrouter.ai. Kept only in this browser session "
+                 "(or in Chatbot/.env as OPENROUTER_API_KEY).")
     model_options = openrouter_models() + [_CUSTOM]
     default_ix = (model_options.index(ss.or_model)
                   if ss.or_model in model_options else len(model_options) - 1)
@@ -370,9 +386,11 @@ def how_it_works_html() -> str:
          "— when you ask about AI — each occupation's AI exposure score. These records "
          "are the only material the AI model gets."),
         ("✅", "The AI writes from those facts — and we check it",
-         "The language model answers using only the collected records and cites each "
-         "one. Every citation is verified against the records it was shown, and the "
-         "answer is labelled grounded, partially grounded or ungrounded. The sources, "
+         "The language model only writes the answer from the collected records and "
+         "cites each one; it does not choose the records. Whichever model you pick, "
+         "it is handed the same graph - only the wording and the citations differ. "
+         "Every citation is verified against the records it was shown, and the answer "
+         "is labelled grounded, partially grounded or ungrounded. The sources, "
          "evidence and graphs are open to you under every answer."),
     ]
     cards = []
@@ -439,6 +457,7 @@ def render_answer(ans: Answer, idx: int, is_last: bool, entities: str | None = N
         f"📚 Sources ({len(ans.sources)})", f"🔎 Evidence ({len(ans.evidence)})",
         "📊 Charts"])
     with t_ans:
+        av.views_note('📝 Answer')
         if entities:
             st.caption(entities)
         if ans.status == "truncated":
@@ -452,31 +471,40 @@ def render_answer(ans: Answer, idx: int, is_last: bool, entities: str | None = N
             st.caption("Citations not found in evidence: " +
                        ", ".join(map(str, ans.invalid_citations)))
     with t_focus:
+        av.views_note('🎯 Focus graph')
         html = _cached_html(ans, "focus", lambda: av.focus_graph_html(ans, engine))
         if html:
             _embed(html, 530)
             colors = ("job colors follow the AI exposure score (green = lower, red = "
                       "higher)" if ans.exposure_in_evidence else "jobs are red")
-            st.caption("Only what this answer relies on: the records it cited, the "
-                       "O*NET Related-Occupations links to each recommended job, and "
-                       "every occupation whose profile it cited. ★ = the occupation you "
-                       f"asked about; {colors}. Click any node or edge for details.")
+            st.caption("The O*NET records retrieved for the occupation(s) you asked about. "
+                       "They are pulled from the knowledge graph *before* the language "
+                       "model runs, so this graph is the same whichever model you choose; "
+                       "the model only writes from it. **Red** = records this model cited "
+                       "in its answer · grey dashed = retrieved but not cited. ★ = the "
+                       f"occupation you asked about; {colors}. Click any node or edge "
+                       "for details.")
         else:
-            st.info("The answer cited no graph records to draw.")
+            st.info("No graph records were retrieved for this question.")
     with t_full:
+        av.views_note('🕸️ Evidence graph')
         html = _cached_html(ans, "full", lambda: av.evidence_graph_html(ans, engine))
         if html:
             _embed(html, 570)
-            st.caption("Everything retrieved for this question. Red = cited by the "
+            st.caption("Everything retrieved for this question - the whole evidence the "
+                       "model was given, identical for every model. Red = cited by the "
                        "model · grey = retrieved only. Node colors: 🔴 Job · 🔵 Task · "
                        "🟢 DWA/IWA/GWA · 🟠 skills · 🟣 software. Click to inspect.")
         else:
             st.info("No graph edges were retrieved.")
     with t_src:
+        av.views_note('📚 Sources')
         av.sources(ans)
     with t_ev:
+        av.views_note('🔎 Evidence')
         av.evidence_table(ans)
     with t_chart:
+        av.views_note('📊 Charts')
         av.charts(ans, engine)
 
     label, color = _STATUS_BADGE.get(ans.status, (ans.status, "#4B5563"))
@@ -524,26 +552,52 @@ def run_question(question: str, forced_seeds: list[str] | None, note: str | None
         st.stop()      # generation failed: keep the transcript as it is
 
 
+def _occ_blurb(soc: str) -> str:
+    """First sentence of an occupation's O*NET description."""
+    import re as _re
+    desc = str(engine.G.nodes[soc].get("description") or "")
+    return _re.split(r"(?<=[.!?])\s", desc, maxsplit=1)[0][:200]
+
+
 def confirmation_card(pending: dict) -> None:
-    """Ask which O*NET occupation(s) the question is about before answering."""
+    """Before answering: for every occupation name in the question that is not
+    an O*NET title, show the closest O*NET occupation(s) with their codes and
+    ask whether to proceed with them; for a name with no close occupation,
+    say that O*NET has no such occupation and ask the user to check it."""
     terms = pending["terms"]
-    names = " / ".join(f"<b>{_html.escape(t['term'])}</b>" for t in terms)
+    found = [t for t in terms if t["candidates"]]
+    missing = [t for t in terms if not t["candidates"]]
     with st.chat_message("assistant"):
-        st.markdown(
-            f"<div class='confirm'><div class='lbl'>Please confirm the occupation</div>"
-            f"<div class='q'>O*NET has no occupation called {names} exactly.</div>"
-            f"<div class='d'>These are the closest O*NET occupations. Tick the "
-            f"ones to proceed with, pick another from the full list, or type a different "
-            f"occupation name in the chat box.</div></div>",
-            unsafe_allow_html=True)
+        if found:
+            names = " / ".join(f"<b>{_html.escape(t['term'])}</b>" for t in found)
+            many = len(found) > 1
+            st.markdown(
+                f"<div class='confirm'><div class='lbl'>Please confirm the occupation"
+                f"{'s' if many else ''}</div>"
+                f"<div class='q'>{names} {'do' if many else 'does'} not match an O*NET "
+                f"occupation title exactly. Below {'are' if many else 'is'} the closest "
+                f"O*NET occupation{'s' if many else ''} with {'their' if many else 'its'} "
+                f"code — shall I proceed with {'them' if many else 'it'}?</div>"
+                f"<div class='d'>Tick the ones to use, pick another occupation from the "
+                f"full list, or type a different occupation name in the chat box.</div></div>",
+                unsafe_allow_html=True)
+        for t in missing:
+            st.error(f"**O*NET has no occupation matching “{t['term']}”.** Please check "
+                     "the name and ask again — or pick the occupation you mean from the "
+                     "full list below.", icon="❌")
         picked: list[str] = []
         label_of: dict[str, str] = {}
-        for t in terms:
+        for t in found:
             opts = [soc for soc, _ in t["candidates"]]
             label_of.update({soc: f"{title} ({soc})" for soc, title in t["candidates"]})
-            via = ("from your wording" if t["via"] == "wording"
-                   else "as the model read your message")
-            picked += st.pills(f"Closest to “{t['term']}” ({via})", opts,
+            top_soc, top_title = t["candidates"][0]
+            via = "" if t["via"] == "wording" else " (as the model read your message)"
+            st.markdown(
+                f"<div class='cand'>“{_html.escape(t['term'])}”{via} → closest match: "
+                f"<b>{_html.escape(top_title)}</b> <span class='soc'>{top_soc}</span>"
+                f"<div class='blurb'>{_html.escape(_occ_blurb(top_soc))}</div></div>",
+                unsafe_allow_html=True)
+            picked += st.pills(f"Proceed with (for “{t['term']}”):", opts,
                                format_func=lambda s: label_of[s], selection_mode="multi",
                                default=opts[:1], key=f"confirm-{pending['question']}-{t['term']}")
         extra = st.selectbox("Or choose any other O*NET occupation", [None] + engine.occupations,
@@ -552,17 +606,21 @@ def confirmation_card(pending: dict) -> None:
         if extra:
             picked.append(extra[1])
         picked = list(dict.fromkeys(picked))
-        c1, c2 = st.columns([1, 1])
-        go = c1.button(f"✅ Proceed with {len(picked)} occupation(s)" if picked else
-                       "✅ Proceed", type="primary", disabled=not picked, width="stretch")
-        skip = c2.button("Answer without choosing", width="stretch",
-                         help="The model is told the evidence may not match your wording.")
+        c1, c2 = st.columns([1.4, 1])
+        if picked:
+            chosen_titles = ", ".join(engine.G.nodes[s].get("name", s) for s in picked)
+            go_label = f"✅ Yes, proceed with {chosen_titles}"
+        else:
+            go_label = "✅ Yes, proceed"
+        go = c1.button(go_label, type="primary", disabled=not picked, width="stretch")
+        skip = c2.button("Answer anyway, without choosing", width="stretch",
+                         help="Not recommended: the evidence may not match your wording, "
+                              "and the answer will say so.")
         if go or skip:
             ss.pending_confirm = None
             chosen = picked if go else []
             if chosen:
-                titles = ", ".join(engine.G.nodes[s].get("name", s) for s in chosen)
-                note = f"📌 Confirmed: {titles}"
+                note = f"📌 Confirmed: {chosen_titles}"
             else:
                 note = "No occupation confirmed — answering from the closest matches."
             run_question(pending["question"], chosen or None, note)

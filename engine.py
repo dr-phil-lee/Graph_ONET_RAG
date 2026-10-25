@@ -167,8 +167,23 @@ class Answer:
 
     @property
     def unsupported_occupations(self) -> list[str]:
-        """Titles of listed occupations the model cited no evidence for."""
-        return [c["title"] for c in self.occupations if not c.get("citations")]
+        """Titles of listed occupations that are not backed by the retrieved
+        evidence at all: the card cites nothing, the occupation was not a
+        retrieval seed (its records were never retrieved), and no cited
+        evidence line mentions it. An occupation the question was about
+        (confirmed or linked) is backed by its retrieved profile even when
+        the model forgot to list citations on its card."""
+        in_graph = set(self.seeds) | {e.node_id for e in self.entities}
+        cited_text = " ".join(text for _, text, cited in self.evidence if cited).lower()
+        out = []
+        for c in self.occupations:
+            soc, title = c.get("soc") or "", (c.get("title") or "").lower()
+            if c.get("citations") or soc in in_graph:
+                continue
+            if (soc and soc in cited_text) or (title and title in cited_text):
+                continue
+            out.append(c["title"])
+        return out
 
     def to_dict(self, include_evidence: bool = True) -> dict:
         p = self.parsed or {}
@@ -241,6 +256,36 @@ Respond ONLY with JSON: {"occupations": ["<title>", ...]} - use [] if the messag
 CONTEXT_SYSTEM_PROMPT = """You rewrite the user's latest chat message about occupations into a standalone question, using the conversation so far. Resolve references such as "it", "they", "those jobs", "the second one", "the less exposed ones" to the exact occupation titles mentioned before. Write the standalone question in English and keep the user's intent; do not answer the question.
 Also list the occupations the standalone question is about, as standard English O*NET titles exactly as they appear in the conversation: the user's own job if it is still relevant, and every job the message refers to (at most 6). Use [] if no occupation is involved.
 Respond ONLY with JSON: {"standalone_question": "<question>", "occupations": ["<title>", ...]}"""
+
+# an occupation name counts as "close" to an O*NET occupation when it is a
+# title / alternate title or a substring of one (search_occupations >= 90);
+# fuzzy-only hits (<= 89) are not offered - the name is reported as missing
+_CLOSE_MATCH_SCORE = 90
+
+
+def _norm_text(s: str) -> str:
+    s = re.sub(r"[^a-z0-9\- ]+", " ", (s or "").lower())
+    return " " + re.sub(r"\s+", " ", s).strip() + " "
+
+
+def title_in_text(title: str, text: str) -> bool:
+    """True when the whole title (singular or plural) is written in the text:
+    "Registered Nurse" / "Registered Nurses" both count, "preschool teachers"
+    is not "Preschool Teachers, Except Special Education"."""
+    t = _norm_text(title).strip()
+    if not t:
+        return False
+    words = t.split()
+    last = words[-1]
+    forms = {t, t + "s", t + "es"}
+    if last.endswith("ies"):
+        forms.add(" ".join(words[:-1] + [last[:-3] + "y"]))
+    elif last.endswith("es") and len(last) > 4:
+        forms.add(" ".join(words[:-1] + [last[:-2]]))
+    if last.endswith("s") and len(last) > 3:
+        forms.add(" ".join(words[:-1] + [last[:-1]]))
+    q = _norm_text(text)
+    return any(f" {f} " in q for f in forms)
 
 # follow-up wording that points back into the conversation
 _REFERENTIAL = re.compile(
@@ -507,36 +552,84 @@ class ChatEngine:
         """
         res = self.resolve_seeds(question, auto_match=auto_match)
         out = {"confirm": False, "terms": [], "entities": res.entities}
-        if any(e.label == "Job" and e.confidence == "high" for e in res.entities):
-            return out
         history = memory.normalize_turns(history)
         if history and _REFERENTIAL.search(question.lower()):
             return out                                  # a follow-up: memory resolves it
-        # exact links stay out of the candidate list (they are already in);
-        # the low-confidence guess is offered as a candidate like any other
-        linked = {e.node_id for e in res.entities if e.confidence == "high"}
+        # An occupation needs no confirmation only when its full O*NET title
+        # is written in the question. Everything else is confirmed, each
+        # name on its own: "zookeepers and preschool teachers" asks about
+        # both (Animal Caretakers; Preschool Teachers, Except Special
+        # Education), "Software Developers and Data Scientists" about neither.
+        exact = {e.node_id for e in res.entities
+                 if e.label == "Job" and title_in_text(e.name, question)}
         terms: list[dict] = []
+        covered: set[str] = set(exact)
         if res.suggestions:
-            detailed = self.suggest_occupations_detailed(question)
-            for term, info in detailed.items():
-                cands = [(s, t) for s, t in info["candidates"] if s not in linked][:6]
+            for term, info in self.suggest_occupations_detailed(question).items():
+                cands = [(s_, t) for s_, t in info["candidates"] if s_ not in exact][:6]
                 if cands:
                     terms.append({"term": term, "candidates": cands, "via": "wording"})
-        elif api_key or not isinstance(self.default_llm, _MissingKeyLLM):
+                    covered |= {s_ for s_, _ in cands}
+        for e in res.entities:          # placed by the exact linker through an alternate title
+            if e.label != "Job" or e.node_id in covered or e.source not in ("linked", "matched"):
+                continue
+            wording = e.term or self._wording_for(e.node_id, question) or e.name
+            cands = [(e.node_id, e.name)] + [
+                (h["soc"], h["title"]) for h in self._close_occupations(wording)
+                if h["soc"] != e.node_id and h["soc"] not in exact][:3]
+            terms.append({"term": wording, "candidates": cands, "via": "wording"})
+            covered |= {s_ for s_, _ in cands}
+        # The model's reading of the message catches occupations the wording
+        # matcher could not place at all ("astronaut", "I sell things over
+        # the phone"). Names it reads that match nothing close in O*NET are
+        # reported as missing, so the user can re-check the name first.
+        if api_key or not isinstance(self.default_llm, _MissingKeyLLM):
             llm = (OpenRouterLLM(api_key, model or self.default_model) if api_key
                    else self.default_llm)
             for name in self._llm_occupation_names(question, llm):
-                hits = self.search_occupations(name, 4)
-                cands = [(h["soc"], h["title"]) for h in hits if h["soc"] not in linked]
-                if cands:
+                hits = self._close_occupations(name)
+                if hits and hits[0]["soc"] in covered:
+                    continue
+                best = hits[0]["score"] if hits else 0
+                if best >= _CLOSE_MATCH_SCORE:
+                    cands = [(h["soc"], h["title"]) for h in hits
+                             if h["score"] >= _CLOSE_MATCH_SCORE and h["soc"] not in exact]
                     terms.append({"term": name, "candidates": cands, "via": "model"})
+                elif not any(t["term"].lower() == name.lower() for t in terms):
+                    terms.append({"term": name, "candidates": [], "via": "model"})
         seen: set[str] = set()
         for t in terms:                                 # one card per occupation
-            t["candidates"] = [(s, n) for s, n in t["candidates"]
-                               if not (s in seen or seen.add(s))]
-        terms = [t for t in terms if t["candidates"]][:3]
+            t["candidates"] = [(s_, n) for s_, n in t["candidates"]
+                               if not (s_ in seen or seen.add(s_))]
+        terms = [t for t in terms if t["candidates"] or t.get("via") == "model"][:4]
         out.update(confirm=bool(terms), terms=terms)
         return out
+
+    def _wording_for(self, nid: str, text: str) -> str | None:
+        """The alternate title of occupation `nid` that is written in the
+        text ("zookeeper" for Animal Caretakers), longest first; None if
+        the text names it some other way."""
+        alts = [str(a) for a in self.G.nodes[nid].get("alt_titles") or []]
+        for alt in sorted(alts, key=len, reverse=True):
+            if title_in_text(alt, text):
+                return alt.lower()
+        return None
+
+    def _close_occupations(self, name: str, limit: int = 4) -> list[dict]:
+        """search_occupations over the name and its singular form ("zookeepers"
+        -> "zookeeper" is an alternate title), best score per occupation."""
+        forms = [name]
+        low = name.strip().lower()
+        for suffix in ("ies", "es", "s"):
+            if low.endswith(suffix) and len(low) > len(suffix) + 2:
+                forms.append(low[:-len(suffix)] + ("y" if suffix == "ies" else ""))
+                break
+        best: dict[str, dict] = {}
+        for form in forms:
+            for h in self.search_occupations(form, limit * 2):
+                if h["score"] > best.get(h["soc"], {"score": 0})["score"]:
+                    best[h["soc"]] = h
+        return sorted(best.values(), key=lambda h: -h["score"])[:limit]
 
     def _llm_occupation_names(self, question: str, llm) -> list[str]:
         """Occupation titles the model reads in the message (best effort)."""
@@ -950,9 +1043,16 @@ class ChatEngine:
                                 if not (e.source == "matched" and e.confidence == "low")
                                 ] + inferred
                 res.seeds = [e.node_id for e in res.entities if e.source != "linked"]
+        aliases = []
+        for e in res.entities:
+            if e.label != "Job" or title_in_text(e.name, question):
+                continue
+            wording = e.term or self._wording_for(e.node_id, question)
+            if wording:
+                aliases.append(f"'{wording}' = {e.name} ({e.node_id})")
         item = {"qid": qid or f"chat-{next(self._qid)}-{time.time():.0f}",
                 "question_template": question, "question_natural": standalone,
-                "history": history,
+                "history": history, "aliases": aliases,
                 "forced_seeds": res.seeds,
                 # the fully resolved entity list (pins, filtered exact links,
                 # fuzzy matches, inferred) is the seed set; the research
@@ -995,7 +1095,8 @@ class ChatEngine:
         seed_jobs = [n for n in seeds if self.G.nodes[n].get("label") == "Job"]
         cards = self._build_cards(parsed, unit_ids, rec, seed_jobs, cited_units)
         exposure = self._exposure_rows(seed_jobs, cards)
-        focus_edges, focus_nodes = self._focus_graph(cited_edges, seed_jobs, cards, citations)
+        focus_edges, focus_nodes = self._focus_graph(
+            cited_edges, seed_jobs, cards, citations, list(rec["context_edge_ids"]))
         return Answer(question=question, parsed=parsed, raw=rec["raw"],
                       seeds=seeds, evidence=evidence,
                       cited_edge_ids=cited_edges,
@@ -1194,13 +1295,25 @@ class ChatEngine:
         return rows
 
     def _focus_graph(self, cited_edges: list[int], seed_jobs: list[str],
-                     cards: list[dict], citations: list[str]) -> tuple[list[int], list[str]]:
-        """Answer-focused subgraph: the cited edges, plus the Related
-        Occupations edges that connect the current job to each recommended
-        one (so every card hangs off the graph), plus every occupation whose
+                     cards: list[dict], citations: list[str],
+                     retrieved_edges: list[int] = ()) -> tuple[list[int], list[str]]:
+        """The knowledge graph of this question: every retrieved O*NET record
+        that touches an occupation the question is about. Retrieval runs
+        before the language model and does not depend on it, so this graph
+        is the same whichever model writes the answer; the model's citations
+        are only highlighted on it. Added so that every card hangs off the
+        graph: the cited edges, the Related Occupations edges from the
+        current job to each recommended one, and every occupation whose
         profile or AI-exposure line was cited."""
-        edges = list(cited_edges)
+        focus = set(seed_jobs)
+        edges = [int(e) for e in retrieved_edges
+                 if int(e) in self.edge_index
+                 and (self.edge_index[int(e)][0] in focus or self.edge_index[int(e)][1] in focus)]
         have = set(edges)
+        for e in cited_edges:
+            if int(e) not in have:
+                have.add(int(e))
+                edges.append(int(e))
         for c in cards:
             for sj in seed_jobs:
                 for _, v, k, d in q.out_edges(self.G, sj, "RELATED_TO"):

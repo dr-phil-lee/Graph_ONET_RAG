@@ -323,6 +323,10 @@ class HybridGraphRAG(GraphRAG):
         user += f"Question: {question}"
         if interpreted and interpreted.strip() != question.strip():
             user += f"\n(Read with the conversation, the question means: {interpreted})"
+        if item.get("aliases"):
+            user += ("\n(O*NET lists the occupations the user named as: "
+                     + "; ".join(item["aliases"]) + ". Treat each as the occupation the "
+                     "user asked about - the evidence above covers it under that title.)")
         resp = self.llm.complete(model=model or self.cfg["models"]["generator"],
                                  system=self.system_prompt, user=user)
         return {
