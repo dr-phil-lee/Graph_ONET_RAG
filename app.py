@@ -37,6 +37,11 @@ st.set_page_config(page_title="GraphRAG-Based O*NET Chatbot", page_icon="🧭", 
 st.markdown(
     """
 <style>
+/* ---- hide Streamlit's own controls (deploy button, toolbar, status widget,
+   main menu, footer) so nothing but the app itself is shown ---- */
+.stAppDeployButton, [data-testid="stToolbar"], [data-testid="stStatusWidget"],
+  [data-testid="stDecoration"], #MainMenu, footer {display: none !important;}
+
 /* ---- layout: one readable column, like a chat app ---- */
 .block-container {padding-top: .9rem; padding-bottom: 6rem; max-width: 1340px;}
 [data-testid="stBottomBlockContainer"] {max-width: 1340px;}
