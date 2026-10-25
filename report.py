@@ -377,7 +377,7 @@ def build_pdf(answers: list, engine, backend_desc: str, budget: int) -> bytes:
                             leftMargin=0.8 * inch, rightMargin=0.8 * inch,
                             topMargin=0.8 * inch, bottomMargin=0.8 * inch,
                             title=f"{TITLE} — {SUBTITLE}",
-                            author="O*NET Graph RAG")
+                            author="GraphRAG-Based O*NET Chatbot")
     doc.build(story)
     return buf.getvalue()
 

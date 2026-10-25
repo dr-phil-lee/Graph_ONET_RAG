@@ -70,7 +70,7 @@ section[data-testid="stSidebar"] h3 {font-size: .8rem; text-transform: uppercase
 
 /* ---- top bar ---- */
 .topbar {display:flex; align-items:baseline; gap:.2rem .6rem; padding:.1rem 0 .4rem; flex-wrap:wrap;}
-.topbar .t {font-size: 1.55rem; font-weight: 800; letter-spacing: -.02em; white-space: nowrap;}
+.topbar .t {font-size: 1.3rem; font-weight: 800; letter-spacing: -.02em; white-space: nowrap;}
 .topbar .s {font-size: .95rem; color: #4B5563; flex-basis: 100%;}
 .st-key-topbtn-report button, .st-key-topbtn-clear button {white-space: nowrap;}
 
@@ -211,7 +211,7 @@ def memory_history() -> list[dict]:
 
 # ----------------------------------------------------------------- sidebar
 with st.sidebar:
-    st.markdown("### 🧭 O*NET Graph RAG")
+    st.markdown("### 🧭 GraphRAG-Based O*NET Chatbot")
     st.caption("Answers are built only from O*NET 30.3 records and cited. "
                "English questions work best.")
 
